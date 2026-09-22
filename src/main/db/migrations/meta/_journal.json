@@ -1,0 +1,48 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1789894878140,
+      "tag": "0000_tiresome_photon",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1789991919091,
+      "tag": "0001_universal_integrations",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1790000434154,
+      "tag": "0002_agent_activity",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1790001645463,
+      "tag": "0003_backfill_message_activities",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1790078505033,
+      "tag": "0004_message_attachments",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1790081290827,
+      "tag": "0005_channel_icons",
+      "breakpoints": true
+    }
+  ]
+}

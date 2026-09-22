@@ -1,0 +1,11 @@
+node_modules/
+out/
+dist/
+release/
+.vite/
+*.log
+.DS_Store
+node_modules/.tmp/
+release/
+test-results/
+playwright-report/

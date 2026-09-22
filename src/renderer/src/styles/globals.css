@@ -1,0 +1,348 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Midnight Aurora -- design tokens.
+ *
+ * A deep midnight shell (title strip and sidebar) holds one bright working
+ * surface. Aurora teal is the brand and the single action colour; electric
+ * lavender marks AI identity and nothing else. Premium comes from precision:
+ * restrained contrast, one type family, a 4px spacing grid, thin borders
+ * instead of heavy shadows.
+ *
+ * Every colour in the app resolves to a variable here (as HSL channels, so
+ * Tailwind can apply opacity), which keeps the palette in one place.
+ */
+:root {
+  /* Shell: midnight navy easing into deep slate. */
+  --shell: 221 39% 11%; /* #111827 */
+  --shell-deep: 222 40% 9%; /* the title strip, one step darker */
+  --shell-hover: 219 34% 15%; /* a row under the pointer */
+  --shell-active: 217 35% 17%; /* the selected row: deep slate */
+  --shell-raised: 217 33% 18%; /* search field, menus on the shell */
+  --shell-line: 217 27% 24%; /* #2D3A4F */
+
+  --shell-text: 210 40% 96%; /* #F1F5F9 */
+  --shell-text-soft: 214 32% 84%;
+  --shell-text-muted: 215 20% 65%; /* #94A3B8 */
+  --shell-text-faint: 215 16% 50%;
+
+  /* Light surfaces. */
+  --canvas: 210 40% 98%; /* #F8FAFC: the conversation */
+  --surface: 0 0% 100%; /* messages hovering, composer, dialogs */
+  --subtle: 210 40% 96%; /* #F1F5F9: quiet fills */
+  --line: 213 27% 92%; /* #E5EAF0 */
+  --line-strong: 213 26% 86%;
+
+  /* Text on light surfaces. Faint is a shade darker than #94A3B8 so 11px
+     timestamps stay legible (3:1 on the canvas). */
+  --text-strong: 218 42% 14%;
+  --text: 216 30% 18%; /* #202B3C */
+  --text-muted: 215 16% 47%; /* #64748B */
+  --text-faint: 216 15% 58%;
+
+  /* Aurora teal: the brand and every primary action. */
+  --primary: 172 66% 52%; /* #35D6C1 */
+  --primary-hover: 172 68% 46%; /* #25C4AF */
+  --primary-muted: 172 66% 52%;
+  --primary-ink: 173 85% 28%; /* teal that reads as text on white (4.8:1) */
+  --on-primary: 221 39% 11%; /* dark text on teal */
+
+  /* Electric lavender: AI identity. */
+  --ai: 255 92% 76%; /* #A78BFA */
+  --ai-ink: 254 64% 58%; /* lavender that reads on white */
+  --ai-muted: 255 92% 76%;
+
+  --accent: 173 85% 28%; /* links and focus on light surfaces */
+
+  --success: 142 71% 45%; /* #22C55E */
+  --success-ink: 142 72% 29%;
+  --warning: 38 92% 50%; /* #F59E0B */
+  --warning-ink: 26 90% 37%;
+  --danger: 0 84% 60%; /* #EF4444 */
+  --danger-ink: 0 72% 45%;
+
+  /* Motion. */
+  --ease-out: cubic-bezier(0.2, 0.7, 0.3, 1);
+  --duration-fast: 120ms;
+  --duration-base: 180ms;
+
+  /* Height of the title strip that holds the window controls. */
+  --titlebar-h: 36px;
+
+  color-scheme: light;
+}
+
+@layer base {
+  * {
+    @apply border-line;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-shell font-sans text-content antialiased;
+    /* A desktop app should not rubber-band or select chrome like a web page. */
+    overscroll-behavior: none;
+    user-select: none;
+    /* Inter's legibility alternates: a tailed l and a serifed I, so l, I and 1 differ. */
+    font-feature-settings: 'cv05', 'cv08';
+  }
+
+  /* Text the user might genuinely want to copy stays selectable. */
+  .selectable,
+  .prose-message,
+  input,
+  textarea {
+    user-select: text;
+  }
+
+  ::selection {
+    background: hsl(var(--primary) / 0.28);
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply rounded-full border-[3px] border-solid border-transparent bg-clip-padding;
+    background-color: rgb(15 23 42 / 0.14);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: rgb(15 23 42 / 0.26);
+  }
+  /* On the shell the thumb is light instead. */
+  .shell-scroll::-webkit-scrollbar-thumb {
+    background-color: rgb(241 245 249 / 0.1);
+  }
+  .shell-scroll::-webkit-scrollbar-thumb:hover {
+    background-color: rgb(241 245 249 / 0.2);
+  }
+
+  /* Text fields draw their own focus state; everything else gets a teal ring.
+     Menus and dialogs take focus as containers when they open, and menu items
+     show focus as their highlight, so none of them get the ring. */
+  :focus-visible {
+    @apply outline-none;
+  }
+  :focus-visible:not(input):not(textarea):not([role='menu']):not([role='menuitem']):not([role='dialog']):not([role='alertdialog']):not([role='listbox']) {
+    @apply ring-2 ring-primary/60 ring-offset-1 ring-offset-transparent;
+  }
+
+  /* Motion communicates state; people who ask for less get none of it. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+@layer components {
+  /* The application shell: midnight navy behind everything. */
+  .app-backdrop {
+    background: linear-gradient(180deg, hsl(var(--shell)) 0%, hsl(var(--shell)) 60%, hsl(var(--shell-active)) 140%);
+  }
+
+  /* Frameless-window drag handles. Anything clickable inside opts back out. */
+  .app-drag {
+    -webkit-app-region: drag;
+  }
+  .app-no-drag {
+    -webkit-app-region: no-drag;
+  }
+
+  /* A soft fade where transcript content slides under the header. */
+  .fade-under-header {
+    background: linear-gradient(to bottom, hsl(var(--canvas)), hsl(var(--canvas) / 0));
+  }
+
+  /* Keyboard shortcut hints. */
+  .kbd {
+    @apply inline-flex h-[18px] items-center rounded-[5px] border px-1.5 font-sans text-[10.5px] font-medium tracking-wide;
+  }
+
+  /* Markdown rendered inside a message. */
+  .prose-message {
+    @apply text-body text-content;
+  }
+  .prose-message > * + * {
+    @apply mt-1.5;
+  }
+  .prose-message h1,
+  .prose-message h2,
+  .prose-message h3,
+  .prose-message h4 {
+    @apply mt-3 font-semibold text-content-strong;
+  }
+  .prose-message > :first-child {
+    @apply mt-0;
+  }
+  .prose-message h1 {
+    @apply text-[15px];
+  }
+  .prose-message h2 {
+    @apply text-[14px];
+  }
+  .prose-message h3,
+  .prose-message h4 {
+    @apply text-[13.5px];
+  }
+  .prose-message p {
+    @apply whitespace-pre-wrap break-words;
+  }
+  .prose-message strong {
+    @apply font-semibold text-content-strong;
+  }
+  .prose-message a {
+    @apply text-accent underline decoration-accent/30 underline-offset-2 hover:decoration-accent;
+  }
+  .prose-message ul {
+    @apply list-disc ps-[21px];
+  }
+  .prose-message ol {
+    @apply list-decimal ps-[21px];
+  }
+  .prose-message li::marker {
+    @apply text-content-faint;
+  }
+  .prose-message ol > li::marker {
+    @apply text-content-muted;
+  }
+  .prose-message li > ul,
+  .prose-message li > ol {
+    @apply mt-0;
+  }
+  .prose-message li + li {
+    @apply mt-[2px];
+  }
+  .prose-message li > p + ul,
+  .prose-message li > p + ol {
+    @apply mt-0;
+  }
+  .prose-message ul.contains-task-list {
+    @apply list-none ps-0.5;
+  }
+  .prose-message .task-list-item input[type='checkbox'] {
+    @apply me-1.5 h-[13px] w-[13px] align-[-2px] accent-[hsl(var(--primary-ink))];
+  }
+  .prose-message blockquote {
+    @apply border-s-2 border-line-strong ps-3 text-content-muted;
+  }
+  .prose-message hr {
+    @apply my-3 border-line;
+  }
+  .prose-message table {
+    @apply w-full border-collapse text-xs;
+  }
+  .prose-message th,
+  .prose-message td {
+    @apply border border-line px-2 py-1 text-start;
+  }
+  .prose-message th {
+    @apply bg-subtle font-semibold;
+  }
+  .prose-message code:not(pre code) {
+    @apply rounded-[5px] border border-line bg-subtle px-[5px] py-[1px] font-mono text-[12px] text-ai-ink;
+  }
+  .prose-message pre {
+    @apply overflow-x-auto px-3 py-2 font-mono text-xs leading-[1.6];
+  }
+  .prose-message pre code {
+    @apply bg-transparent p-0 text-content;
+  }
+
+  /*
+   * Code never flips. A fenced block or an inline span inside a Hebrew or
+   * Arabic message still reads left-to-right, and `unicode-bidi: isolate`
+   * stops it from reordering the text around it.
+   */
+  .prose-message pre,
+  .prose-message code {
+    direction: ltr;
+    text-align: left;
+    unicode-bidi: isolate;
+  }
+
+  /* An @mention of a real agent: a lavender-tinted pill with a bot glyph. */
+  .mention-chip {
+    @apply inline-flex h-[20px] items-center gap-[3px] rounded-[5px] bg-ai/[0.14] px-[5px] align-top font-medium leading-[20px] text-ai-ink;
+  }
+  .mention-chip svg {
+    @apply shrink-0;
+  }
+  .mention-link {
+    @apply cursor-pointer font-medium text-accent hover:underline;
+  }
+
+  /*
+   * Anything that interpolates a name into a sentence -- a channel title, a
+   * mention, a task row -- isolates it, so an RTL name cannot drag the
+   * surrounding LTR chrome around with it.
+   */
+  .bidi-isolate {
+    unicode-bidi: isolate;
+  }
+}
+
+/* highlight.js tokens: a quiet light theme in the spirit of GitHub's. */
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-meta .hljs-keyword {
+  color: #cf222e;
+}
+.hljs-string,
+.hljs-regexp {
+  color: #0a3069;
+}
+.hljs-number,
+.hljs-symbol,
+.hljs-attr,
+.hljs-attribute,
+.hljs-variable,
+.hljs-template-variable {
+  color: #0550ae;
+}
+.hljs-comment,
+.hljs-quote {
+  color: #6e7781;
+  font-style: italic;
+}
+.hljs-title,
+.hljs-title.function_,
+.hljs-function .hljs-title,
+.hljs-section {
+  color: #8250df;
+}
+.hljs-built_in,
+.hljs-type,
+.hljs-title.class_ {
+  color: #953800;
+}
+.hljs-tag,
+.hljs-name,
+.hljs-selector-id,
+.hljs-selector-class {
+  color: #116329;
+}
+.hljs-deletion {
+  color: #82071e;
+  background: #ffebe9;
+}
+.hljs-addition {
+  color: #116329;
+  background: #dafbe1;
+}

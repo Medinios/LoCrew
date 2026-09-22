@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" style="display:block">
+  <!--
+    Locrew application icon (Midnight Aurora).
+    The mark is the same 24-unit geometry as src/renderer/src/components/brand/BrandMark.tsx,
+    scaled onto a midnight tile. Render to PNG with `npm run icons`.
+  -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1B2638"/>
+      <stop offset="1" stop-color="#0E1420"/>
+    </linearGradient>
+    <linearGradient id="edge" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.14"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0.02"/>
+    </linearGradient>
+  </defs>
+  <!-- Tile: inset 64px on a 1024 canvas, per desktop icon grids. -->
+  <rect x="64" y="64" width="896" height="896" rx="200" fill="url(#tile)"/>
+  <rect x="65.5" y="65.5" width="893" height="893" rx="198.5" fill="none" stroke="url(#edge)" stroke-width="3"/>
+  <!-- Mark: 24 units scaled by 22 and centred (528 px wide). -->
+  <g transform="translate(248 248) scale(22)">
+    <path d="M7.1 4.6v14.8" stroke="#35D6C1" stroke-width="2.1" stroke-linecap="round" fill="none" opacity="0.62"/>
+    <path d="M7.1 19.4h11" stroke="#A78BFA" stroke-width="2.1" stroke-linecap="round" fill="none" opacity="0.8"/>
+    <circle cx="7.1" cy="4.6" r="2.7" fill="#35D6C1"/>
+    <circle cx="7.1" cy="19.4" r="2.7" fill="#35D6C1"/>
+    <circle cx="18.1" cy="19.4" r="2.7" fill="#A78BFA"/>
+  </g>
+</svg>
