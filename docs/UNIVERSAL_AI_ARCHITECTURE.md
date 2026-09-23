@@ -1,6 +1,6 @@
 # Universal AI integration: architecture
 
-How Locrew connects arbitrary model providers, custom agents, MCP servers and external agents, and how that fits into the application described in [ARCHITECTURE.md](ARCHITECTURE.md). The research behind each decision is in [UNIVERSAL_AI_RESEARCH.md](UNIVERSAL_AI_RESEARCH.md).
+How LoCrew connects arbitrary model providers, custom agents, MCP servers and external agents, and how that fits into the application described in [ARCHITECTURE.md](ARCHITECTURE.md). The research behind each decision is in [UNIVERSAL_AI_RESEARCH.md](UNIVERSAL_AI_RESEARCH.md).
 
 **Contents**
 

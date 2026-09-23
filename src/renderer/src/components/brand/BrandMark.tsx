@@ -1,7 +1,7 @@
 import { cn } from '@/lib/utils';
 
 /**
- * The Locrew mark: three connected nodes that form an "L" -- a small crew.
+ * The LoCrew mark: three connected nodes that form an "L" -- a small crew.
  * Two teal nodes and one lavender node -- you and your agents on one team --
  * joined by the strokes of the letter, the lavender foot being the handoff to
  * an agent. Built on a 24px grid so it stays crisp at its smallest size.

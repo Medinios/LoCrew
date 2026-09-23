@@ -1,4 +1,4 @@
-import { Plus } from 'lucide-react';
+import { Plus, ShieldCheck } from 'lucide-react';
 import { useMemo, useRef, useState } from 'react';
 import { AgentList, busyAgentStates } from '@/components/sidebar/AgentList';
 import { ChannelList } from '@/components/sidebar/ChannelList';
@@ -13,6 +13,33 @@ import { findAgentForDm, useApp } from '@/stores/app';
  * The midnight sidebar: the workspace, search, the two destinations, the
  * channels, a direct message per agent, and the person at the bottom.
  */
+/**
+ * Shown while any agent is writing without being asked. A permission you
+ * cannot see is one you forget you granted, so this sits above your own name
+ * until the session ends.
+ */
+function SessionAccessBadge() {
+  const sessions = useApp((s) => s.sessionAccess);
+  const openSettings = useApp((s) => s.openSettings);
+  if (!sessions.length) return null;
+
+  const first = sessions[0]!;
+  return (
+    <button
+      type="button"
+      onClick={() => openSettings('access')}
+      title="Agents are writing without asking. Open Write access to end it."
+      className="mb-1 flex h-8 w-full items-center gap-2 rounded-md border border-warning/40 bg-warning/[0.14] px-2 text-left transition-colors duration-fast hover:bg-warning/[0.2]"
+    >
+      <ShieldCheck size={13} strokeWidth={2} className="shrink-0 text-warning" />
+      <span className="min-w-0 flex-1 truncate text-2xs font-medium text-ink">Write access on</span>
+      <span className="shrink-0 truncate text-2xs text-ink-muted">
+        {sessions.length === 1 ? first.label : `${sessions.length} sessions`}
+      </span>
+    </button>
+  );
+}
+
 export function WorkspaceSidebar({
   onAddAgent,
   onNewChannel,
@@ -136,6 +163,7 @@ export function WorkspaceSidebar({
       </nav>
 
       <div className="border-t border-shell-line/70 px-3 py-2">
+        <SessionAccessBadge />
         <UserProfile onOpenSettings={onOpenSettings} working={busyAgents.size} />
       </div>
     </aside>

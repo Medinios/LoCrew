@@ -1,6 +1,6 @@
 # Architecture
 
-How Locrew is put together, and why. Written for someone about to change the code.
+How LoCrew is put together, and why. Written for someone about to change the code.
 
 Agents on any model provider, MCP servers with per-agent tool permissions, and external A2A agents are described in [UNIVERSAL_AI_ARCHITECTURE.md](UNIVERSAL_AI_ARCHITECTURE.md), with the research behind them in [UNIVERSAL_AI_RESEARCH.md](UNIVERSAL_AI_RESEARCH.md). This document covers the core they plug into.
 
@@ -268,7 +268,7 @@ Express was removed in favour of `node:http`: it is CommonJS, which an ESM-capab
 
 SQLite through Drizzle, at `app.getPath('userData')/locrew.db`. WAL on, foreign keys on.
 
-The app was called AgentWorkspace before it became Locrew. An existing install keeps its data folder (`agent-workspace` under the OS app-data directory) and its `agent-workspace.db` file, because that folder also holds the key that decrypts stored API keys on Windows. `src/main/user-data.ts` makes that choice; an explicit `--user-data-dir` overrides it.
+The app was called AgentWorkspace before it became LoCrew. An existing install keeps its data folder (`agent-workspace` under the OS app-data directory) and its `agent-workspace.db` file, because that folder also holds the key that decrypts stored API keys on Windows. `src/main/user-data.ts` makes that choice; an explicit `--user-data-dir` overrides it.
 
 | Table | Holds |
 |---|---|
@@ -307,6 +307,26 @@ The lock is in-process and advisory. It coordinates agents inside this app and n
 Git worktree isolation, so two agents can genuinely work in parallel, is the obvious next step and is not implemented.
 
 ---
+
+### Approving a write
+
+An agent set to "ask first" stops on every mutating tool call, and the question is put in the app rather than in a native message box, so the operator can see what would change before deciding.
+
+`src/main/approvals/diff.ts` builds the preview in the main process, where the file system is: it reads the file as it is now, works out what the call would make of it (`Write` replaces the content, `Edit` and `MultiEdit` apply their replacements in memory), and diffs the two with Myers' algorithm, bounded in both edit distance and output length. Nothing is written: the runtime performs the operation itself once the answer comes back. A change it cannot model honestly -- a binary file, a pattern that is not in the file, one that appears several times, a notebook edit -- is reported as a note instead of a guessed diff.
+
+`src/main/approvals/manager.ts` holds the pending questions and is deliberately fail-closed. The run's abort signal settles the question as denied, so stopping a run never leaves a write waiting on a promise; closing the window or quitting does the same for everything outstanding; and an answer that arrives twice is ignored. The renderer only displays what it is sent and posts back an answer, so a compromised renderer can allow or deny an operation -- as the operator could -- but cannot alter what the operation is.
+
+### Work sessions
+
+Approving every write is right for an occasional change and unusable for an hour of real work, so the operator can open a *work session*: `src/main/security/session-access.ts` holds temporary grants, each covering one agent or one working directory, either for a set time (capped at 12 hours) or until it is revoked.
+
+The orchestrator is the single enforcement point. `effectiveWorkspaceAccess()` raises `approval_required` to `read_write` for a covered run, which is what stops both Claude Code's `canUseTool` and Codex's `approvalPolicy` from asking; a session opened mid-run is caught by the same check in the approval path. Three rules keep it honest:
+
+- **Memory only.** Grants are never persisted, so restarting the app returns to asking. A permission that outlives the session that needed it is one nobody remembers granting.
+- **Never a promotion.** A `read_only` agent is never raised: that setting is a decision about the agent, not about this hour's work.
+- **Never MCP tools.** A grant marked `ask` on an MCP tool keeps asking. The file access level is about the operator's own directory; an MCP tool is someone else's code.
+
+The approval dialog offers the same thing in place: *Allow for 1 hour* or *Allow until I revoke*, with a checkbox to cover every agent in that directory. While any session is open the sidebar shows it, and Settings → Write access lists each one with its remaining time and ends it.
 
 ## 10. Security model
 
@@ -399,6 +419,7 @@ Tests execute through Electron's bundled Node (`ELECTRON_RUN_AS_NODE=1 electron 
 9. Activity reactions come only from runtime events, through `transition()`. Never from a timer, and never from `ExecutionState`.
 10. Anything the compiler cannot see needs a runtime check or a test. The two bugs that reached this codebase both lived in compiler blind spots: a selector's return identity, and an untyped config object plus a `PATH` string. Treat `CodexOptions.config` keys, MCP tool names and binary paths as unverified until something executes them.
 11. Status colour and motion come from real state. Presence dots go through `agentPresence()`, the pulsing teal dot appears only while an agent is working, and nothing animates on a timer to look busy. Reduced motion turns animation off entirely.
+12. Temporary write access stays temporary: in memory, never raising a read-only agent, never covering MCP tool grants, and always visible in the interface while it is open.
 
 ---
 

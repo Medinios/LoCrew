@@ -1,5 +1,5 @@
 import * as Menu from '@radix-ui/react-dropdown-menu';
-import { Bot, ChevronsUpDown, CircleUserRound, Hash, Plug, Plus, Server, SlidersHorizontal } from 'lucide-react';
+import { Bot, ChevronsUpDown, CircleUserRound, Hash, Info, Plug, Plus, Server, SlidersHorizontal } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { BrandMark } from '@/components/brand/BrandMark';
 import { SHIP } from '@/lib/lexicon';
@@ -12,8 +12,8 @@ import { useApp } from '@/stores/app';
 export function WorkspaceHeader({ onNewChannel, onAddAgent }: { onNewChannel(): void; onAddAgent(): void }) {
   const settings = useApp((s) => s.settings);
   const openSettings = useApp((s) => s.openSettings);
-  // A workspace the user named shows "Locrew" underneath; an unnamed one is
-  // Locrew itself, with the tagline underneath instead.
+  // A workspace the user named shows "LoCrew" underneath; an unnamed one is
+  // LoCrew itself, with the tagline underneath instead.
   const custom = settings?.workspaceName?.trim();
   const named = !!custom && custom !== SHIP.appName;
   const name = named ? custom : SHIP.appName;
@@ -67,6 +67,9 @@ export function WorkspaceHeader({ onNewChannel, onAddAgent }: { onNewChannel(): 
           <Menu.Separator className="my-1 h-px bg-shell-line" />
           <Item icon={<CircleUserRound size={14} />} onSelect={() => openSettings('profile')}>
             Your profile
+          </Item>
+          <Item icon={<Info size={14} />} onSelect={() => openSettings('about')}>
+            About {SHIP.appName}
           </Item>
         </Menu.Content>
       </Menu.Portal>

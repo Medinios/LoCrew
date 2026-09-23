@@ -1,9 +1,10 @@
-import { readFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { readFile, stat } from 'node:fs/promises';
 import { userInfo } from 'node:os';
 import { join } from 'node:path';
 import { app, BrowserWindow, dialog, protocol, safeStorage, shell } from 'electron';
 import { EVENT_CHANNEL, type AppEvent } from '../shared/ipc.js';
-import type { AppSettings, RuntimeType } from '../shared/types.js';
+import type { Agent, ApprovalRequestView, AppSettings, RuntimeType } from '../shared/types.js';
 import { DEFAULT_LIMITS } from '../shared/types.js';
 import { openDatabase, type OpenDbResult } from './db/index.js';
 import { IntegrationStore } from './db/integration-store.js';
@@ -19,6 +20,9 @@ import { ProviderRegistry } from './providers/registry.js';
 import { A2ARuntime } from './runtimes/a2a.js';
 import { ModelAgentRuntime } from './runtimes/model-agent.js';
 import { SecretStore, safeStorageCipher } from './security/secrets.js';
+import { SessionAccessManager } from './security/session-access.js';
+import { ApprovalManager } from './approvals/manager.js';
+import { previewFileChange } from './approvals/diff.js';
 import { Orchestrator } from './orchestrator/orchestrator.js';
 import { ClaudeCodeAdapter } from './runtimes/claude-code.js';
 import { CodexAdapter } from './runtimes/codex.js';
@@ -31,7 +35,7 @@ import {
   resolveLocalImage,
 } from './workspace/local-images.js';
 
-// Locrew was called AgentWorkspace. An existing install keeps its data folder
+// LoCrew was called AgentWorkspace. An existing install keeps its data folder
 // (see user-data.ts); an explicit --user-data-dir, as the tests pass, wins.
 if (!app.commandLine.hasSwitch('user-data-dir')) {
   const legacy = legacyUserDataDir(app.getPath('appData'));
@@ -55,6 +59,10 @@ let gateway: GatewayServer | null = null;
 let orchestrator: Orchestrator | null = null;
 let runtimeAdapters: Map<RuntimeType, AgentRuntime> | null = null;
 let mcpManager: McpClientManager | null = null;
+/** Temporary write permissions. In memory only: a restart returns to asking. */
+let sessionAccess: SessionAccessManager | null = null;
+/** Operations waiting for the operator's answer in the app's own dialog. */
+let approvals: ApprovalManager | null = null;
 
 /** The OS account name, capitalised, as a starting display name. */
 function defaultDisplayName(): string {
@@ -132,31 +140,89 @@ function createWindow(): BrowserWindow {
   return window;
 }
 
-/** Asks the operator to approve a mutating tool call from an agent. */
+/**
+ * Asks the operator to approve a mutating tool call from an agent.
+ *
+ * The question is put in the app, not in a native message box, so it can show
+ * the diff of what the agent is about to write. With no window there is
+ * nobody to ask, and the operation is refused.
+ */
 async function requestApproval(request: ApprovalRequest): Promise<ApprovalDecision> {
   const store = database ? new Store(database.db) : null;
   const agent = store?.getAgent(request.agentId);
-  const name = agent?.name ?? request.agentId;
-
-  const detail = summariseToolInput(request.toolName, request.input);
   const window = mainWindow;
-  if (!window) return { approved: false, reason: 'No window is available to ask the operator.' };
+  if (!window || !approvals) {
+    return { approved: false, reason: 'No window is available to ask the operator.' };
+  }
 
-  const result = await dialog.showMessageBox(window, {
-    type: 'question',
-    buttons: ['Deny', 'Allow once'],
-    defaultId: 0,
-    cancelId: 0,
-    noLink: true,
-    title: 'Approve agent operation',
-    message: `${name} wants to run ${request.toolName}`,
-    // Agents on a model provider or an external service have no directory.
-    detail: agent?.workingDirectory ? `${detail}\n\nWorking directory: ${agent.workingDirectory}` : detail,
-  });
+  // Whether a work session already covers this is decided in the orchestrator,
+  // the one enforcement point; by here the answer was no.
+  return approvals.ask(await buildApprovalView(request, agent ?? undefined), request.signal);
+}
 
-  return result.response === 1
-    ? { approved: true }
-    : { approved: false, reason: 'The operator denied this operation.' };
+/** Everything the operator needs to decide, including the diff of the change. */
+async function buildApprovalView(
+  request: ApprovalRequest,
+  agent: Agent | undefined,
+): Promise<ApprovalRequestView> {
+  const workingDirectory = agent?.workingDirectory ?? '';
+  const command = typeof request.input['command'] === 'string' ? request.input['command'] : null;
+
+  // Only a write in the agent's own directory has a diff to show.
+  const file =
+    request.kind === 'workspace'
+      ? await previewFileChange({
+          toolName: request.toolName,
+          input: request.input,
+          workingDirectory,
+          readFile: readForPreview,
+        }).catch((error: unknown) => {
+          console.warn('[approval] could not preview the change:', error);
+          return null;
+        })
+      : null;
+
+  return {
+    id: randomUUID(),
+    agentId: request.agentId,
+    agentName: agent?.name ?? request.agentId,
+    agentAvatar: agent?.avatar ?? '',
+    agentColor: agent?.avatarColor ?? '#64748B',
+    executionId: request.executionId,
+    toolName: request.toolName,
+    kind: request.kind,
+    workingDirectory,
+    command,
+    file,
+    details: file || command ? describeExtras(request.input) : truncate(JSON.stringify(request.input, null, 2)),
+    // Sessions cover writes an agent makes under "ask first", nothing else.
+    canOpenSession:
+      request.kind === 'workspace' && !!agent && agent.permissions.workspaceAccess === 'approval_required',
+    createdAt: Date.now(),
+  };
+}
+
+/** The file as it is now, or null when it does not exist yet. */
+async function readForPreview(path: string): Promise<{ text: string; bytes: number } | null> {
+  try {
+    const info = await stat(path);
+    if (!info.isFile()) return null;
+    return { text: await readFile(path, 'utf8'), bytes: info.size };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+/** Arguments worth showing beside a command or a diff, such as a description. */
+function describeExtras(input: Record<string, unknown>): string | null {
+  const skip = new Set(['command', 'content', 'file_path', 'notebook_path', 'old_string', 'new_string', 'edits', 'replace_all']);
+  const rest = Object.entries(input).filter(([key, value]) => !skip.has(key) && value !== undefined && value !== '');
+  return rest.length ? truncate(rest.map(([key, value]) => `${key}: ${format(value)}`).join('\n')) : null;
+}
+
+function format(value: unknown): string {
+  return typeof value === 'string' ? value : JSON.stringify(value);
 }
 
 /**
@@ -265,6 +331,25 @@ async function bootstrap(): Promise<void> {
   // libsecret). If none is available, saving a key fails rather than
   // falling back to plaintext.
   const secrets = new SecretStore(database.db, safeStorageCipher(safeStorage));
+
+  const sessions = new SessionAccessManager((grants) =>
+    mainWindow?.webContents.send(EVENT_CHANNEL, { type: 'session-access', grants } satisfies AppEvent),
+  );
+  sessionAccess = sessions;
+
+  const pendingApprovals = new ApprovalManager({
+    emit: (event) => mainWindow?.webContents.send(EVENT_CHANNEL, event satisfies AppEvent),
+    openSession: (view, choice) => {
+      const agent = store.getAgent(view.agentId);
+      if (!agent) return;
+      sessions.grant({ scope: choice.scope, agent, durationMs: choice.durationMs });
+      console.info(
+        `[access] work session opened for ${choice.scope === 'directory' ? agent.workingDirectory : agent.name}` +
+          `${choice.durationMs ? ` for ${Math.round(choice.durationMs / 60000)} minutes` : ' until revoked'}`,
+      );
+    },
+  });
+  approvals = pendingApprovals;
 
   const orphaned = store.reconcileOrphanedExecutions();
   if (orphaned > 0) {
@@ -384,6 +469,7 @@ async function bootstrap(): Promise<void> {
     getSettings: () => settings,
     activity,
     attachments,
+    sessionAccess: sessions,
   });
 
   locks.onChange((current) => emit({ type: 'locks', locks: current }));
@@ -408,6 +494,8 @@ async function bootstrap(): Promise<void> {
     providers,
     mcp,
     orchestrator,
+    sessionAccess: sessions,
+    approvals: pendingApprovals,
     runtimes,
     locks,
     getSettings: () => settings,
@@ -444,7 +532,7 @@ app.whenReady().then(async () => {
   } catch (error) {
     console.error('[startup] failed:', error);
     dialog.showErrorBox(
-      'Locrew failed to start',
+      'LoCrew failed to start',
       error instanceof Error ? error.message : String(error),
     );
     app.quit();
@@ -459,10 +547,14 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => {
+  // Nobody is left to answer a pending question, so refuse rather than leave
+  // an agent waiting on a promise that will never settle.
+  approvals?.clear('The window was closed before you answered.');
   if (process.platform !== 'darwin') app.quit();
 });
 
 app.on('before-quit', async (event) => {
+  approvals?.clear('The app is closing.');
   if (!orchestrator && !gateway && !database) return;
   event.preventDefault();
 

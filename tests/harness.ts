@@ -23,6 +23,7 @@ import { ProviderRegistry } from '../src/main/providers/registry.js';
 import { A2ARuntime } from '../src/main/runtimes/a2a.js';
 import { ModelAgentRuntime } from '../src/main/runtimes/model-agent.js';
 import { SecretStore, type SecretCipher } from '../src/main/security/secrets.js';
+import { SessionAccessManager } from '../src/main/security/session-access.js';
 import type {
   AgentRuntime,
   ApprovalDecision,
@@ -156,6 +157,8 @@ export interface Harness {
   locks: WorkspaceLockManager;
   runtime: ScriptedRuntime;
   codexRuntime: ScriptedRuntime;
+  /** Temporary write permissions, as the app's Settings pane grants them. */
+  sessionAccess: SessionAccessManager;
   events: AppEvent[];
   settings: AppSettings;
   approvals: ApprovalRequest[];
@@ -241,6 +244,8 @@ export async function createHarness(limits?: Partial<ExecutionLimits>): Promise<
   });
   await gateway.start();
 
+  const sessionAccess = new SessionAccessManager();
+
   orchestrator = new Orchestrator({
     store,
     gateway,
@@ -259,6 +264,7 @@ export async function createHarness(limits?: Partial<ExecutionLimits>): Promise<
     getSettings: () => settings,
     activity,
     attachments,
+    sessionAccess,
   });
 
   const result: Harness = {
@@ -280,6 +286,7 @@ export async function createHarness(limits?: Partial<ExecutionLimits>): Promise<
     locks,
     runtime,
     codexRuntime,
+    sessionAccess,
     events,
     settings,
     approvals: harness.approvals!,

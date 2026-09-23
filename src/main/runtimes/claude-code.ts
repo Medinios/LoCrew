@@ -291,6 +291,7 @@ export class ClaudeCodeAdapter implements AgentRuntime {
         executionId: ctx.executionId,
         toolName,
         input,
+        kind: 'workspace',
       });
       return decision.approved
         ? { behavior: 'allow', updatedInput: input }

@@ -77,6 +77,14 @@ export interface ApprovalRequest {
   executionId: string;
   toolName: string;
   input: Record<string, unknown>;
+  /**
+   * `workspace`: a write or command in the agent's own directory, which a
+   * work session can cover. `tool`: an MCP tool granted as "ask first", which
+   * it never covers -- that permission is about someone else's code.
+   */
+  kind: 'workspace' | 'tool';
+  /** Aborts with the run, so a cancelled execution stops waiting for an answer. */
+  signal?: AbortSignal;
 }
 
 export interface ApprovalDecision {
@@ -277,7 +285,7 @@ export function buildSystemPrompt(
   const t = (name: string) => `mcp__${gateway.serverName}__${name}`;
 
   return [
-    `You are "${agent.name}", a member of Locrew, a local team of AI agents working with a human operator.`,
+    `You are "${agent.name}", a member of LoCrew, a local team of AI agents working with a human operator.`,
     `You are taking part in the conversation "${conversationName}" alongside a human operator and other AI agents.`,
     '',
     '## Working directory',

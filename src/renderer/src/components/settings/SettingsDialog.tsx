@@ -1,7 +1,9 @@
-import { Bot, CircleUserRound, FolderOpen, Gauge, Server, SlidersHorizontal } from 'lucide-react';
+import { Bot, CircleUserRound, FolderOpen, Gauge, Info, Server, ShieldCheck, SlidersHorizontal } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import type { AppSettings, ExecutionLimits } from '@shared/types';
 import { Button, Field, Input, Modal, Switch } from '@/components/ui/primitives';
+import { AboutPane } from '@/components/settings/AboutPane';
+import { AccessPane } from '@/components/settings/AccessPane';
 import { McpServersPane } from '@/components/settings/McpServersPane';
 import { ProfilePane } from '@/components/settings/ProfilePane';
 import { ProvidersPane } from '@/components/settings/ProvidersPane';
@@ -14,7 +16,9 @@ const SECTIONS: Array<{ id: SettingsSection; label: string; icon: ReactNode }> =
   { id: 'general', label: 'General', icon: <SlidersHorizontal size={14} /> },
   { id: 'providers', label: 'AI Providers', icon: <Bot size={14} /> },
   { id: 'mcp', label: 'MCP Servers', icon: <Server size={14} /> },
+  { id: 'access', label: 'Write access', icon: <ShieldCheck size={14} /> },
   { id: 'limits', label: 'Limits', icon: <Gauge size={14} /> },
+  { id: 'about', label: 'About', icon: <Info size={14} /> },
 ];
 
 /** App settings, opened to a section from anywhere through the store. */
@@ -56,7 +60,9 @@ export function SettingsDialog() {
           {section === 'general' ? <GeneralPane /> : null}
           {section === 'providers' ? <ProvidersPane /> : null}
           {section === 'mcp' ? <McpServersPane /> : null}
+          {section === 'access' ? <AccessPane /> : null}
           {section === 'limits' ? <LimitsPane /> : null}
+          {section === 'about' ? <AboutPane /> : null}
         </div>
       </div>
     </Modal>

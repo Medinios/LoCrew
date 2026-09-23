@@ -264,6 +264,53 @@ test('sends a pasted image to the agent', async () => {
   expect(JSON.stringify(withImage?.body?.messages)).toContain('data:image/png;base64,');
 });
 
+test('asks in the app before a tool call set to "ask first", and runs it when allowed', async () => {
+  // Same tool, downgraded from Allow to Ask first.
+  await page.evaluate(async () => {
+    const api = (window as unknown as { api: { invoke(c: string, p?: unknown): Promise<any> } }).api;
+    const [agent] = await api.invoke('agents:list');
+    const [server] = await api.invoke('mcp:list');
+    await api.invoke('grants:set', {
+      agentId: agent.id,
+      grants: [{ serverId: server.id, toolName: 'echo', mode: 'ask' }],
+    });
+  });
+
+  const composer = page.getByPlaceholder('Message Mock Agent');
+  await composer.fill('Run the echo tool now');
+  await composer.press('Enter');
+
+  // The question is asked in the app, with the arguments the tool would get.
+  const approval = page.getByRole('dialog').filter({ hasText: 'wants to use' });
+  await expect(approval).toBeVisible({ timeout: 30_000 });
+  await expect(approval).toContainText('echo');
+  await expect(approval).toContainText('ping');
+  // An MCP tool is someone else's code, so no work session is offered for it.
+  await expect(approval.getByRole('button', { name: 'Allow for 1 hour' })).toHaveCount(0);
+
+  await approval.getByRole('button', { name: 'Allow once' }).click();
+  await expect(approval).toBeHidden();
+
+  // Allowed, so the tool ran and its output came back in the reply.
+  await expect(
+    page.locator('article').getByRole('paragraph').filter({ hasText: 'Echo said' }).last(),
+  ).toBeVisible({ timeout: 30_000 });
+});
+
+test('denies a tool call, and tells the agent so', async () => {
+  const composer = page.getByPlaceholder('Message Mock Agent');
+  await composer.fill('Try the echo tool again');
+  await composer.press('Enter');
+
+  const approval = page.getByRole('dialog').filter({ hasText: 'wants to use' });
+  await expect(approval).toBeVisible({ timeout: 30_000 });
+  await approval.getByRole('button', { name: 'Deny' }).click();
+  await expect(approval).toBeHidden();
+
+  // The model is told the call was refused; the run ends normally either way.
+  await expect(page.locator('article').last()).toBeVisible();
+});
+
 test('never writes the API key to disk in plain text', async () => {
   const hits = filesUnder(userDataDir).filter((path) => {
     try {

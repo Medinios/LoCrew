@@ -4,15 +4,15 @@ import type { AgentStatus, ExecutionState, TaskStatus } from '@shared/types';
  * The app's vocabulary.
  *
  * Plain, familiar messaging language -- channels, direct messages, agents.
- * Keeping every
- * user-facing word here means the tone stays consistent and can be changed by
- * editing one file rather than hunting strings through the components.
+ * Keeping every user-facing word here means the tone stays consistent and can
+ * be changed by editing one file rather than hunting strings through the
+ * components.
  *
  * Functional affordances keep their familiar names -- `#` prefixes a channel,
  * `@` mentions an agent -- because a theme should not cost muscle memory.
  */
 export const SHIP = {
-  appName: 'Locrew',
+  appName: 'LoCrew',
   tagline: 'Your local agent team.',
 
   sections: {
@@ -48,7 +48,7 @@ export const SHIP = {
   },
 
   empty: {
-    welcome: 'Welcome to Locrew',
+    welcome: 'Welcome to LoCrew',
     welcomeDetail:
       'Create an agent, then open a channel to put several of them to work together. Nothing runs until you send a message.',
     noConversation: 'Pick up where you left off',
@@ -102,7 +102,8 @@ export const HOLD_ACCESS = {
   read_only: { label: 'Read only', detail: 'May read files but change nothing.' },
   approval_required: {
     label: 'Ask first',
-    detail: 'Reads freely. Every write waits for your approval.',
+    detail:
+      'Reads freely. Every write waits for your approval, unless you open a work session under Settings → Write access.',
   },
   read_write: { label: 'Full access', detail: 'May change files without asking.' },
 } as const;

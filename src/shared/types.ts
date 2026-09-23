@@ -51,6 +51,108 @@ export const TERMINAL_EXECUTION_STATES: ExecutionState[] = [
  */
 export type WorkspaceAccess = 'read_only' | 'read_write' | 'approval_required';
 
+/** Who a temporary write permission covers. */
+export type SessionGrantScope = 'agent' | 'directory';
+
+/**
+ * A work session: temporary write access that stops the "approve every write"
+ * prompts for one agent, or for every agent working in one directory.
+ *
+ * Grants live in memory for one run of the app, never on disk, so closing
+ * LoCrew always returns to asking.
+ */
+export interface SessionWriteGrant {
+  id: string;
+  scope: SessionGrantScope;
+  /** The agent this covers, for `agent` scope. */
+  agentId: string | null;
+  /** The working directory this covers, for `directory` scope. */
+  directory: string | null;
+  /** What to call it in the interface: the agent's name, or the directory. */
+  label: string;
+  grantedAt: number;
+  /** When it lapses. `null` means it lasts until it is revoked or the app closes. */
+  expiresAt: number | null;
+}
+
+/** The longest a work session may last: a working day, not forever. */
+export const MAX_SESSION_GRANT_MS = 12 * 60 * 60 * 1000;
+
+/** Versions and paths, for the About screen and for bug reports. */
+export interface AppInfo {
+  version: string;
+  electron: string;
+  chrome: string;
+  node: string;
+  platform: string;
+  /** Where this installation keeps its database, settings and attachments. */
+  dataDirectory: string;
+}
+
+/** One line of a proposed change, as the operator reads it before deciding. */
+export interface DiffLine {
+  kind: 'add' | 'remove' | 'context';
+  text: string;
+  /** Line numbers in the file as it is, and as it would become. */
+  oldLine: number | null;
+  newLine: number | null;
+}
+
+/** A run of changed lines with a little unchanged context around it. */
+export interface DiffHunk {
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  lines: DiffLine[];
+}
+
+/** What one tool call would do to one file. */
+export interface ApprovalFileChange {
+  /** Absolute path on disk. */
+  path: string;
+  /** Relative to the agent's working directory when it sits inside it. */
+  display: string;
+  kind: 'create' | 'edit';
+  hunks: DiffHunk[];
+  added: number;
+  removed: number;
+  /** The change is shown in part: the rest was too long to display. */
+  truncated: boolean;
+  /** Why the diff is missing or incomplete: binary file, pattern not found, unreadable. */
+  note: string | null;
+}
+
+/** A pending operation, with everything the operator needs to decide. */
+export interface ApprovalRequestView {
+  id: string;
+  agentId: string;
+  agentName: string;
+  agentAvatar: string;
+  agentColor: string;
+  executionId: string;
+  toolName: string;
+  /** `workspace`: a write or command. `tool`: an MCP tool granted as "ask first". */
+  kind: 'workspace' | 'tool';
+  workingDirectory: string;
+  /** The shell command, for tools that run one. */
+  command: string | null;
+  /** The file this would change, with its diff. */
+  file: ApprovalFileChange | null;
+  /** Anything else the tool was called with. */
+  details: string | null;
+  /** Whether a work session can be opened from this request. */
+  canOpenSession: boolean;
+  createdAt: number;
+}
+
+/** What the operator answered. */
+export type ApprovalChoice =
+  | { decision: 'deny' }
+  | { decision: 'once' }
+  /** Allow, and stop asking for a while: see SessionWriteGrant. */
+  | { decision: 'session'; durationMs: number | null; scope: SessionGrantScope };
+
 export type ConversationKind = 'dm' | 'channel';
 export type MemberType = 'human' | 'agent';
 

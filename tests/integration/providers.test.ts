@@ -33,7 +33,7 @@ function openAiInput(overrides: Partial<ProviderInput> = {}): ProviderInput {
     authMethod: 'bearer',
     apiKey: 'sk-test-secret-123456',
     headers: [
-      { name: 'X-Title', value: 'Locrew', secret: false },
+      { name: 'X-Title', value: 'LoCrew', secret: false },
       { name: 'X-Org-Token', value: 'org-secret-987654', secret: false },
     ],
     ...overrides,
@@ -49,7 +49,7 @@ describe('registering a custom provider', () => {
     expect(JSON.stringify(view)).not.toContain('sk-test-secret-123456');
     // A header whose name looks like a credential is treated as one.
     expect(view.headers.find((x) => x.name === 'X-Org-Token')).toMatchObject({ secret: true, value: '', hasValue: true });
-    expect(view.headers.find((x) => x.name === 'X-Title')).toMatchObject({ secret: false, value: 'Locrew' });
+    expect(view.headers.find((x) => x.name === 'X-Title')).toMatchObject({ secret: false, value: 'LoCrew' });
 
     // Nothing in the database holds the plaintext.
     const dump = JSON.stringify(h.database.sqlite.prepare('SELECT * FROM providers').all()) +
@@ -133,7 +133,7 @@ describe('OpenAI-compatible API', () => {
     // Credentials and custom headers went out on the request.
     const request = mock.requests.find((r) => r.path === '/v1/models')!;
     expect(request.headers.authorization).toBe('Bearer sk-test-secret-123456');
-    expect(request.headers['x-title']).toBe('Locrew');
+    expect(request.headers['x-title']).toBe('LoCrew');
     expect(request.headers['x-org-token']).toBe('org-secret-987654');
   });
 

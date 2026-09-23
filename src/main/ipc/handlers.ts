@@ -1,4 +1,4 @@
-import { BrowserWindow, dialog, ipcMain } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain } from 'electron';
 import { z } from 'zod';
 import {
   EVENT_CHANNEL,
@@ -23,6 +23,8 @@ import type { McpClientManager } from '../mcp/manager.js';
 import type { ProviderRegistry } from '../providers/registry.js';
 import { inspectAgentCard } from '../runtimes/a2a.js';
 import type { SecretStore } from '../security/secrets.js';
+import type { SessionAccessManager } from '../security/session-access.js';
+import type { ApprovalManager } from '../approvals/manager.js';
 import type { Orchestrator } from '../orchestrator/orchestrator.js';
 import { discoverPlugins } from '../runtimes/plugins.js';
 import type { AgentRuntime } from '../runtimes/types.js';
@@ -41,6 +43,10 @@ export interface IpcContext {
   providers: ProviderRegistry;
   mcp: McpClientManager;
   orchestrator: Orchestrator;
+  /** Temporary write permissions, held for this run of the app only. */
+  sessionAccess: SessionAccessManager;
+  /** Operations waiting for the operator to allow or deny them. */
+  approvals: ApprovalManager;
   runtimes: Map<RuntimeType, AgentRuntime>;
   locks: WorkspaceLockManager;
   getSettings(): AppSettings;
@@ -424,6 +430,55 @@ export function registerIpcHandlers(ctx: IpcContext): void {
       return view;
     },
     'mcp:reconnect': (input) => ctx.mcp.reconnect(input.id),
+
+    /* ----------------------------------------------------------------- app */
+
+    'app:info': () => ({
+      version: app.getVersion(),
+      electron: process.versions['electron'] ?? '',
+      chrome: process.versions['chrome'] ?? '',
+      node: process.versions['node'] ?? '',
+      platform: `${process.platform} ${process.arch}`,
+      dataDirectory: app.getPath('userData'),
+    }),
+
+    /* ------------------------------------------------------------ approvals */
+
+    'approvals:list': () => ctx.approvals.list(),
+
+    'approvals:respond': (input) => {
+      // A question that already lapsed is not an error: the run may have been
+      // stopped while the operator was reading it.
+      ctx.approvals.respond(input.id, input.choice);
+      return { ok: true as const };
+    },
+
+    /* -------------------------------------------------------- work sessions */
+
+    'access:list': () => ctx.sessionAccess.list(),
+
+    'access:grant': (input) => {
+      const agent = ctx.store.getAgent(input.agentId);
+      if (!agent) throw new Error('That agent no longer exists.');
+      // A work session only lifts the approval prompt. It is not a way to give
+      // write access to an agent the operator deliberately set to read-only.
+      if (agent.permissions.workspaceAccess === 'read_only') {
+        throw new Error(
+          `${agent.name} is set to read only. Change its access level if it should write at all.`,
+        );
+      }
+      if (agent.permissions.workspaceAccess === 'read_write') {
+        throw new Error(`${agent.name} already writes without asking.`);
+      }
+      ctx.sessionAccess.grant({ scope: input.scope, agent, durationMs: input.durationMs });
+      return ctx.sessionAccess.list();
+    },
+
+    'access:revoke': (input) => {
+      if (input.id === null) ctx.sessionAccess.revokeAll();
+      else ctx.sessionAccess.revoke(input.id);
+      return ctx.sessionAccess.list();
+    },
 
     /* ---------------------------------------------------------- tool grants */
 

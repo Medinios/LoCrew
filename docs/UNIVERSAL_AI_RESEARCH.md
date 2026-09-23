@@ -1,6 +1,6 @@
 # Universal AI integration: research
 
-What Locrew needs to connect arbitrary models, tool servers and external agents, what the current standards actually say, and why the implementation looks the way it does.
+What LoCrew needs to connect arbitrary models, tool servers and external agents, what the current standards actually say, and why the implementation looks the way it does.
 
 All facts here were checked against primary sources (specifications, official docs, npm/PyPI registries, LICENSE files, source code) on **2026-09-21**. Anything that could not be confirmed is marked **UNVERIFIED**. The companion document, [UNIVERSAL_AI_ARCHITECTURE.md](UNIVERSAL_AI_ARCHITECTURE.md), describes what was built.
 
@@ -20,7 +20,7 @@ All facts here were checked against primary sources (specifications, official do
 
 ## 1. The questions
 
-Locrew (then called AgentWorkspace) already ran two agent runtimes (Claude Code and Codex, each a local CLI driven through its official SDK) in Slack-style channels, with an authenticated MCP gateway for agent-to-agent messages. The goal was to let a user add, without changing source code:
+LoCrew (then called AgentWorkspace) already ran two agent runtimes (Claude Code and Codex, each a local CLI driven through its official SDK) in Slack-style channels, with an authenticated MCP gateway for agent-to-agent messages. The goal was to let a user add, without changing source code:
 
 - **any model**: hosted APIs, OpenAI-compatible servers, local models;
 - **custom agents**: a name, instructions, a model and a tool set, where one model can back many agents;

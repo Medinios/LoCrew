@@ -5,8 +5,12 @@ import type {
   AgentEvent,
   AgentExecution,
   AppSettings,
+  ApprovalChoice,
+  ApprovalRequestView,
   Conversation,
   Message,
+  SessionGrantScope,
+  SessionWriteGrant,
   Task,
 } from '@shared/types';
 import type { McpServerView, ProviderView, ToolGrant } from '@shared/integrations';
@@ -43,7 +47,7 @@ export type Location = { view: 'conversation'; id: string } | { view: 'inbox' } 
 export type SidePanel = 'details' | 'activity';
 
 /** Sections of the Settings dialog, addressable from anywhere in the app. */
-export type SettingsSection = 'profile' | 'general' | 'providers' | 'mcp' | 'limits';
+export type SettingsSection = 'profile' | 'general' | 'providers' | 'mcp' | 'access' | 'limits' | 'about';
 
 const MAX_HISTORY = 50;
 
@@ -82,6 +86,10 @@ interface AppState {
   mcpServers: McpServerView[];
   /** Every agent's MCP tool grants, keyed by agent id. */
   grants: Record<string, ToolGrant[]>;
+  /** Work sessions in force: temporary write access, this run of the app only. */
+  sessionAccess: SessionWriteGrant[];
+  /** Operations an agent is waiting on, oldest first. */
+  approvals: ApprovalRequestView[];
   /** The Settings dialog, when open, and which section it shows. */
   settingsSection: SettingsSection | null;
   /** True while the Create Agent wizard is open. */
@@ -120,6 +128,12 @@ interface AppState {
   closeSettings(): void;
   setWizardOpen(open: boolean): void;
   toggleReaction(messageId: string, emoji: string): Promise<void>;
+  /** Opens a work session: write access without a prompt per file. */
+  grantSessionAccess(agentId: string, scope: SessionGrantScope, durationMs: number | null): Promise<void>;
+  /** Ends one work session, or every one of them when `id` is null. */
+  revokeSessionAccess(id: string | null): Promise<void>;
+  /** Answers one pending operation: allow it, deny it, or stop being asked. */
+  respondToApproval(id: string, choice: ApprovalChoice): Promise<void>;
 }
 
 export const useApp = create<AppState>((set, get) => ({
@@ -149,6 +163,8 @@ export const useApp = create<AppState>((set, get) => ({
   providers: [],
   mcpServers: [],
   grants: {},
+  sessionAccess: [],
+  approvals: [],
   settingsSection: null,
   wizardOpen: false,
   activities: {},
@@ -157,7 +173,7 @@ export const useApp = create<AppState>((set, get) => ({
   endedActivity: {},
 
   async bootstrap() {
-    const [agents, conversations, settings, locks, executions, costs, providers, mcpServers, grants, live] =
+    const [agents, conversations, settings, locks, executions, costs, providers, mcpServers, grants, sessionAccess, approvals, live] =
       await Promise.all([
         invoke('agents:list'),
         invoke('conversations:list'),
@@ -168,6 +184,8 @@ export const useApp = create<AppState>((set, get) => ({
         invoke('providers:list'),
         invoke('mcp:list'),
         invoke('grants:list', {}),
+        invoke('access:list'),
+        invoke('approvals:list'),
         invoke('activity:live'),
       ]);
 
@@ -181,6 +199,8 @@ export const useApp = create<AppState>((set, get) => ({
       providers,
       mcpServers,
       grants: groupGrants(grants),
+      sessionAccess,
+      approvals,
       // Events may have arrived while this snapshot loaded; newer copies win.
       ...live.reduce(
         (acc, record) => applyLiveActivity(acc, record),
@@ -525,6 +545,22 @@ export const useApp = create<AppState>((set, get) => ({
       case 'grants':
         set((state) => ({ grants: { ...state.grants, [event.agentId]: event.grants } }));
         break;
+
+      case 'session-access':
+        set({ sessionAccess: event.grants });
+        break;
+
+      case 'approval':
+        set((state) =>
+          state.approvals.some((a) => a.id === event.request.id)
+            ? state
+            : { approvals: [...state.approvals, event.request] },
+        );
+        break;
+
+      case 'approval-resolved':
+        set((state) => ({ approvals: state.approvals.filter((a) => a.id !== event.id) }));
+        break;
     }
   },
 
@@ -570,6 +606,29 @@ export const useApp = create<AppState>((set, get) => ({
 
   setWizardOpen(open) {
     set({ wizardOpen: open });
+  },
+
+  async grantSessionAccess(agentId, scope, durationMs) {
+    try {
+      set({ sessionAccess: await invoke('access:grant', { agentId, scope, durationMs }) });
+    } catch (error) {
+      get().pushToast({
+        level: 'error',
+        title: 'Could not start the work session',
+        detail: error instanceof Error ? error.message : String(error),
+      });
+    }
+  },
+
+  async respondToApproval(id, choice) {
+    // Taken off the list at once: the answer is on its way and the question
+    // should not sit there looking unanswered.
+    set((state) => ({ approvals: state.approvals.filter((a) => a.id !== id) }));
+    await invoke('approvals:respond', { id, choice });
+  },
+
+  async revokeSessionAccess(id) {
+    set({ sessionAccess: await invoke('access:revoke', { id }) });
   },
 
   async toggleReaction(messageId, emoji) {

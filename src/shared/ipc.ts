@@ -7,17 +7,21 @@
  * surface it can reach.
  */
 import { z } from 'zod';
+import { MAX_SESSION_GRANT_MS } from './types.js';
 import type { InvokeChannelName } from './channels.js';
 import { EVENT_CHANNEL } from './channels.js';
 import type {
   Agent,
   AgentEvent,
   AgentExecution,
+  AppInfo,
   AppSettings,
+  ApprovalRequestView,
   Conversation,
   ConversationMember,
   Message,
   RuntimeDetection,
+  SessionWriteGrant,
   Task,
 } from './types.js';
 import type {
@@ -273,6 +277,35 @@ export const setGrantsInput = z.object({ agentId: id, grants: z.array(grantSchem
 export const listGrantsInput = z.object({ agentId: id.optional(), serverId: id.optional() });
 export const providerTestInput = z.object({ id: id.optional(), draft: providerInput.optional() });
 export const setModelsInput = z.object({ id, models: z.array(providerModelSchema).max(2000) });
+/** The operator's answer to one pending operation. */
+export const approvalResponseInput = z.object({
+  id: z.string().min(1).max(128),
+  choice: z.discriminatedUnion('decision', [
+    z.object({ decision: z.literal('deny') }),
+    z.object({ decision: z.literal('once') }),
+    z.object({
+      decision: z.literal('session'),
+      durationMs: z.number().int().min(60_000).max(MAX_SESSION_GRANT_MS).nullable(),
+      scope: z.enum(['agent', 'directory']),
+    }),
+  ]),
+});
+
+/**
+ * Opening a work session: temporary write access for an agent, or for every
+ * agent in its working directory. The directory is taken from the agent, so
+ * the renderer can never name a path of its own.
+ */
+export const sessionGrantInput = z.object({
+  agentId: id,
+  scope: z.enum(['agent', 'directory']),
+  /** `null` lasts until it is revoked or the app closes. */
+  durationMs: z.number().int().min(60_000).max(MAX_SESSION_GRANT_MS).nullable(),
+});
+
+/** Ending one work session, or every one of them when `id` is null. */
+export const sessionRevokeInput = z.object({ id: z.string().min(1).max(128).nullable() });
+
 export const a2aInspectInput = z.object({
   cardUrl: z.string().min(1).max(2048),
   allowInsecure: z.boolean().optional(),
@@ -385,6 +418,15 @@ export const INVOKE_SCHEMAS = {
   'grants:list': listGrantsInput,
   'grants:set': setGrantsInput,
 
+  'app:info': z.void(),
+
+  'approvals:list': z.void(),
+  'approvals:respond': approvalResponseInput,
+
+  'access:list': z.void(),
+  'access:grant': sessionGrantInput,
+  'access:revoke': sessionRevokeInput,
+
   'a2a:inspect': a2aInspectInput,
 } as const;
 
@@ -465,6 +507,15 @@ export interface InvokeResults {
   'grants:list': ToolGrant[];
   'grants:set': ToolGrant[];
 
+  'app:info': AppInfo;
+
+  'approvals:list': ApprovalRequestView[];
+  'approvals:respond': { ok: true };
+
+  'access:list': SessionWriteGrant[];
+  'access:grant': SessionWriteGrant[];
+  'access:revoke': SessionWriteGrant[];
+
   'a2a:inspect': A2ACardSummary;
 }
 
@@ -519,6 +570,12 @@ export type AppEvent =
   | { type: 'mcp-server'; server: McpServerView }
   | { type: 'mcp-server-deleted'; serverId: string }
   | { type: 'grants'; agentId: string; grants: ToolGrant[] }
+  /** Work sessions started, lapsed or revoked. */
+  | { type: 'session-access'; grants: SessionWriteGrant[] }
+  /** An agent is waiting for the operator to allow or deny an operation. */
+  | { type: 'approval'; request: ApprovalRequestView }
+  /** That question is settled, by an answer or because the run ended. */
+  | { type: 'approval-resolved'; id: string }
   /** An agent's activity on a message changed. */
   | { type: 'activity'; activity: MessageActivityRecord }
   /** The user's own reactions on a message changed. */

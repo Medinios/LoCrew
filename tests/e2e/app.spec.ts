@@ -44,7 +44,7 @@ test.afterAll(async () => {
 });
 
 test('launches and renders the workspace shell', async () => {
-  await expect(page.getByText('Locrew').first()).toBeVisible();
+  await expect(page.getByText('LoCrew').first()).toBeVisible();
   await expect(page.getByPlaceholder('Search everything')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Inbox', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Agents', exact: true })).toBeVisible();
@@ -52,7 +52,7 @@ test('launches and renders the workspace shell', async () => {
 });
 
 test('shows an empty state before any conversation exists', async () => {
-  await expect(page.getByText('Welcome to Locrew')).toBeVisible();
+  await expect(page.getByText('Welcome to LoCrew')).toBeVisible();
   await expect(page.getByText('Your local agent team.').first()).toBeVisible();
 });
 
@@ -246,6 +246,77 @@ test('refuses a profile image that is not a raster image', async () => {
   });
 
   expect(result).toContain('Invalid payload');
+});
+
+test('shows an About screen with the project links and credits', async () => {
+  await page.getByRole('button', { name: /workspace menu/ }).click();
+  await page.getByRole('menuitem', { name: /^About/ }).click();
+
+  const settings = page.getByRole('dialog', { name: 'Settings' });
+  await expect(settings.getByText(/^Version \d/)).toBeVisible();
+
+  // The repository link points at the real project and opens outside the app.
+  const source = settings.getByRole('link', { name: /Source code/ });
+  await expect(source).toHaveAttribute('href', 'https://github.com/Medinios/LoCrew');
+  await expect(source).toHaveAttribute('target', '_blank');
+
+  // Discord has no invite yet, so it is shown but is not a link.
+  await expect(settings.getByText('Coming soon')).toBeVisible();
+  await expect(settings.getByRole('link', { name: /Discord/ })).toHaveCount(0);
+
+  // Credits come from the installed packages, with their licences.
+  await expect(settings.getByRole('link', { name: 'electron' })).toBeVisible();
+  await expect(settings.getByRole('link', { name: '@modelcontextprotocol/sdk' })).toBeVisible();
+  await expect(settings.getByText('MIT').first()).toBeVisible();
+
+  // And the versions a bug report needs.
+  await expect(settings.getByText('Chromium')).toBeVisible();
+  await page.keyboard.press('Escape');
+});
+
+test('opens and ends a work session for write access', async () => {
+  // A CLI agent set to "ask first": the only kind a work session applies to.
+  await page.evaluate(async () => {
+    const api = (window as unknown as { api: { invoke(c: string, p?: unknown): Promise<unknown> } }).api;
+    await api.invoke('agents:create', {
+      name: 'Writer',
+      description: '',
+      runtimeType: 'claude-code',
+      avatar: '',
+      avatarColor: '#35D6C1',
+      workingDirectory: 'C:/e2e/project',
+      permissions: {
+        workspaceAccess: 'approval_required',
+        allowAgentToAgent: true,
+        allowTaskUpdates: true,
+        maxCostPerExecutionUsd: 2,
+      },
+      config: { maxTurnsPerExecution: 6, timeoutMs: 600000 },
+    });
+  });
+
+  await page.getByTitle('Profile and settings', { exact: true }).click();
+  const settings = page.getByRole('dialog', { name: 'Settings' });
+  await settings.getByRole('button', { name: 'Write access' }).click();
+  await expect(settings.getByText('No session is open.', { exact: false })).toBeVisible();
+
+  await settings.getByRole('button', { name: 'Start session' }).click();
+
+  // It shows up as open, and the sidebar says so even with Settings closed.
+  const row = settings.getByRole('listitem').filter({ hasText: 'Writer' });
+  await expect(row).toBeVisible();
+  await expect(row).toContainText('This agent writes without asking');
+  await page.keyboard.press('Escape');
+  const badge = page.getByRole('button', { name: /Write access on/ });
+  await expect(badge).toBeVisible();
+
+  // The badge opens the pane that ends it.
+  await badge.click();
+  await expect(settings.getByRole('heading', { name: 'Write access' })).toBeVisible();
+  await settings.getByRole('listitem').filter({ hasText: 'Writer' }).getByRole('button', { name: 'End' }).click();
+  await expect(settings.getByText('No session is open.', { exact: false })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(badge).toBeHidden();
 });
 
 test('persists the channel across a restart', async () => {

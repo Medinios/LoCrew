@@ -73,6 +73,15 @@ export const INVOKE_CHANNELS = [
   'grants:list',
   'grants:set',
 
+  'access:list',
+  'access:grant',
+  'access:revoke',
+
+  'approvals:list',
+  'approvals:respond',
+
+  'app:info',
+
   'a2a:inspect',
 ] as const;
 

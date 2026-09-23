@@ -32,6 +32,7 @@ import type {
 } from '../runtimes/types.js';
 import { buildSystemPrompt } from '../runtimes/types.js';
 import { WorkspaceLockManager } from '../workspace/locks.js';
+import { effectiveWorkspaceAccess, type SessionAccessPolicy } from '../security/session-access.js';
 import { evaluateActivation, remainingAgentTurns } from './limits.js';
 import { resolveMentions } from './mentions.js';
 
@@ -66,6 +67,8 @@ export interface OrchestratorDeps {
   activity: AgentActivityManager;
   /** Stores images sent with the human's messages. */
   attachments: ImageAttachmentStore;
+  /** Temporary write permissions, when the operator has opened a work session. */
+  sessionAccess?: SessionAccessPolicy;
 }
 
 /** Images handed to a runtime in one turn; older ones are named in the prompt only. */
@@ -522,7 +525,11 @@ export class Orchestrator implements GatewayServices {
     };
 
     try {
-      if (WorkspaceLockManager.requiresLock(agent.permissions.workspaceAccess)) {
+      // A work session raises "ask first" to read/write for this run, so the
+      // agent writes without a dialog for every file. See security/session-access.
+      const workspaceAccess = effectiveWorkspaceAccess(agent, this.deps.sessionAccess);
+
+      if (WorkspaceLockManager.requiresLock(workspaceAccess)) {
         const holder = locks.holder(agent.workingDirectory);
         if (holder && holder.agentId !== agent.id) {
           this.setState(job, 'queued');
@@ -551,7 +558,7 @@ export class Orchestrator implements GatewayServices {
         agent,
         conversation.name,
         gateway,
-        agent.permissions.workspaceAccess,
+        workspaceAccess,
         peers.map((p) => ({ id: p.id, name: p.name, runtimeType: p.runtimeType })),
       );
 
@@ -577,16 +584,21 @@ export class Orchestrator implements GatewayServices {
         conversationKind: conversation.kind,
         trigger: job.trigger,
         gateway,
-        workspaceAccess: agent.permissions.workspaceAccess,
+        workspaceAccess,
         workingDirectory: agent.workingDirectory,
         abortSignal: controller.signal,
         maxTurns: agent.config.maxTurnsPerExecution,
         maxCostUsd: agent.permissions.maxCostPerExecutionUsd,
         timeoutMs,
         requestApproval: (request) => {
+          // A session opened mid-run covers the rest of it: the run started
+          // under "ask first", so the runtime is still asking.
+          if (request.kind === 'workspace' && this.deps.sessionAccess?.covers(agent)) {
+            return Promise.resolve({ approved: true });
+          }
           this.setState(job, 'waiting_for_human');
           this.deps.activity.signal(job.executionId, { type: 'approval_requested' });
-          return this.deps.requestApproval(request).finally(() => {
+          return this.deps.requestApproval({ ...request, signal: controller.signal }).finally(() => {
             // A run cancelled while the dialog was open stays cancelled.
             if (controller.signal.aborted) return;
             this.setState(job, 'working');
@@ -818,6 +830,8 @@ export class Orchestrator implements GatewayServices {
         executionId: run.job.executionId,
         toolName: request.toolName,
         input: request.input,
+        kind: 'tool',
+        signal: run.controller.signal,
       });
     } finally {
       if (!run.controller.signal.aborted) {

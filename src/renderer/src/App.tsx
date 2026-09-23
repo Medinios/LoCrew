@@ -1,6 +1,7 @@
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { AlertTriangle, Info, X, XCircle } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { ApprovalDialog } from '@/components/chat/ApprovalDialog';
 import { ChatView } from '@/components/chat/ChatView';
 import { TitleBar } from '@/components/layout/TitleBar';
 import { WorkspaceSidebar } from '@/components/sidebar/WorkspaceSidebar';
@@ -172,6 +173,7 @@ export default function App() {
         onOpenChange={(open) => !open && setEditingAgent(null)}
       />
       <SettingsDialog />
+      <ApprovalDialog />
       <NewChannelDialog open={channelDialogOpen} onOpenChange={setChannelDialogOpen} />
       <ToastStack />
     </div>
