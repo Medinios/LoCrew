@@ -11,6 +11,7 @@ import type {
 } from '@shared/types';
 import type { McpServerView, ProviderView, ToolGrant } from '@shared/integrations';
 import type { MessageActivityRecord, MessageReaction } from '@shared/activity';
+import type { QuotaReport } from '@shared/quota';
 
 /** Typed wrapper over the preload bridge. */
 export function invoke<C extends InvokeChannel>(
@@ -60,6 +61,10 @@ interface AppState {
   locks: WorkspaceLockInfo[];
   settings: AppSettings | null;
   costs: CostSummary | null;
+  /** Provider subscription quota, per runtime. Account-wide, not per agent. */
+  quota: QuotaReport;
+  /** True while a quota refresh is running, so the button can say so. */
+  quotaRefreshing: boolean;
   toasts: Toast[];
   panel: SidePanel | null;
   sidebarWidth: number;
@@ -107,6 +112,7 @@ interface AppState {
   refreshAgents(): Promise<void>;
   refreshConversations(): Promise<void>;
   refreshCosts(): Promise<void>;
+  refreshQuota(force?: boolean): Promise<void>;
   refreshSettings(): Promise<void>;
   applyEvent(event: AppEvent): void;
   dismissToast(id: string): void;
@@ -135,6 +141,8 @@ export const useApp = create<AppState>((set, get) => ({
   locks: [],
   settings: null,
   costs: null,
+  quota: {},
+  quotaRefreshing: false,
   toasts: [],
   panel: null,
   sidebarWidth: 260,
@@ -330,6 +338,27 @@ export const useApp = create<AppState>((set, get) => ({
     set({ costs: await invoke('costs:summary') });
   },
 
+  /**
+   * Asks the main process for a quota reading.
+   *
+   * `force` is the user pressing refresh; without it an unexpired cached
+   * reading is returned untouched, so opening a panel costs nothing. Main
+   * coalesces concurrent callers into one fetch per runtime either way.
+   */
+  async refreshQuota(force = false) {
+    if (get().quotaRefreshing) return;
+    set({ quotaRefreshing: true });
+    try {
+      set({ quota: await invoke('quota:refresh', { force }) });
+    } catch {
+      // Main always answers with a snapshot, including for failures, so
+      // reaching here means IPC itself failed. Keep whatever is on screen
+      // rather than blanking real numbers.
+    } finally {
+      set({ quotaRefreshing: false });
+    }
+  },
+
   async refreshSettings() {
     set({ settings: await invoke('settings:get') });
   },
@@ -495,6 +524,10 @@ export const useApp = create<AppState>((set, get) => ({
 
       case 'locks':
         set({ locks: event.locks });
+        break;
+
+      case 'quota':
+        set({ quota: event.report });
         break;
 
       case 'members-changed':

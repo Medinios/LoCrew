@@ -52,6 +52,9 @@ export const INVOKE_CHANNELS = [
 
   'costs:summary',
 
+  'quota:report',
+  'quota:refresh',
+
   'agents:duplicate',
 
   'providers:list',

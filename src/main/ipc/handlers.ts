@@ -24,6 +24,7 @@ import type { ProviderRegistry } from '../providers/registry.js';
 import { inspectAgentCard } from '../runtimes/a2a.js';
 import type { SecretStore } from '../security/secrets.js';
 import type { Orchestrator } from '../orchestrator/orchestrator.js';
+import type { QuotaManager } from '../quota/manager.js';
 import { discoverPlugins } from '../runtimes/plugins.js';
 import type { AgentRuntime } from '../runtimes/types.js';
 import type { WorkspaceLockManager } from '../workspace/locks.js';
@@ -41,6 +42,8 @@ export interface IpcContext {
   providers: ProviderRegistry;
   mcp: McpClientManager;
   orchestrator: Orchestrator;
+  /** Provider subscription quota, cached per runtime login. */
+  quota: QuotaManager;
   runtimes: Map<RuntimeType, AgentRuntime>;
   locks: WorkspaceLockManager;
   getSettings(): AppSettings;
@@ -161,6 +164,10 @@ export function registerIpcHandlers(ctx: IpcContext): void {
       ctx.orchestrator.cancelConversation(input.id);
       ctx.secrets.delete(agent?.config.a2a?.secretId);
       ctx.store.deleteAgent(input.id);
+      // That may have been the last agent on its runtime, leaving a cached
+      // quota reading nobody can see and a stale answer waiting to be shown the
+      // moment such an agent is created again.
+      ctx.quota.prune();
       emit(ctx, { type: 'agent-deleted', agentId: input.id });
       return { ok: true as const };
     },
@@ -385,6 +392,16 @@ export function registerIpcHandlers(ctx: IpcContext): void {
     /* ---------------------------------------------------------------- costs */
 
     'costs:summary': () => ctx.store.costSummary(),
+
+    /* ---------------------------------------------------------------- quota */
+
+    // Answers from cache without touching a provider, so opening a panel is
+    // free. The renderer asks for a refresh separately when it wants one.
+    'quota:report': () => ctx.quota.report(),
+
+    // Refreshes expired readings; `force` ignores the TTL. Simultaneous callers
+    // share one fetch per runtime, so a held-down refresh button cannot fan out.
+    'quota:refresh': (input) => ctx.quota.refresh(input?.force ?? false),
 
     /* ------------------------------------------------------------ providers */
 

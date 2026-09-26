@@ -29,6 +29,7 @@ import type {
 } from './integrations.js';
 import type { MessageActivityRecord, MessageReaction } from './activity.js';
 import { isReactionEmoji } from './activity.js';
+import type { QuotaReport } from './quota.js';
 
 export { EVENT_CHANNEL };
 
@@ -364,6 +365,9 @@ export const INVOKE_SCHEMAS = {
 
   'costs:summary': z.void(),
 
+  'quota:report': z.void(),
+  'quota:refresh': z.object({ force: z.boolean().optional() }).optional(),
+
   'agents:duplicate': idInput,
 
   'providers:list': z.void(),
@@ -444,6 +448,9 @@ export interface InvokeResults {
 
   'costs:summary': CostSummary;
 
+  'quota:report': QuotaReport;
+  'quota:refresh': QuotaReport;
+
   'agents:duplicate': Agent;
 
   'providers:list': ProviderView[];
@@ -492,10 +499,82 @@ export interface WorkspaceLockInfo {
   acquiredAt: number;
 }
 
+/**
+ * How much of a window's spend is actually known. A total without this is a
+ * claim; a total with it is a floor the reader can judge.
+ */
+export interface UsageCoverage {
+  /**
+   * Runs that reported a figure nothing could anchor -- a session cumulative
+   * from before this accounting, a session first seen mid-flight, or a counter
+   * that moved unreadably. Their spend is real and the total is short of it.
+   */
+  unverifiedExecutions: number;
+  /**
+   * Finished runs that reported no usage at all. Distinct from the above: those
+   * reported something unusable, these reported nothing, and the difference is
+   * worth saying out loud.
+   */
+  unavailableExecutions: number;
+  /** Runs on a runtime with no pricing at all, so no total could include them. */
+  unpricedExecutions: number;
+}
+
 export interface CostSummary {
   totalUsd: number;
+  totalCoverage: UsageCoverage;
   byAgent: Array<{ agentId: string; costUsd: number; executions: number }>;
   last24hUsd: number;
+  last24hCoverage: UsageCoverage;
+  /** Per-agent consumption this app recorded, for the windows the UI shows. */
+  windows: RecordedUsageWindows;
+}
+
+/** One agent's recorded consumption within a window. */
+export interface RecordedUsageRow {
+  agentId: string;
+  /**
+   * Measured spend only. Runs whose spend could not be established contribute
+   * nothing here and are counted in `unverifiedExecutions` instead, so this is
+   * a floor rather than a total whenever that count is above zero.
+   */
+  costUsd: number;
+  inputTokens: number;
+  outputTokens: number;
+  executions: number;
+  /**
+   * Cost-reporting runs in this window whose spend is not known: recorded
+   * before per-execution accounting existed, or a session first seen partway
+   * through, or a counter that moved in a way nothing can read. Their spend is
+   * real but unrecoverable, so the UI says so rather than implying the measured
+   * figure is the whole story.
+   */
+  unverifiedExecutions: number;
+  /** Finished runs on a cost-reporting runtime that reported no usage at all. */
+  unavailableExecutions: number;
+  /**
+   * Runs on a runtime this app cannot price at all -- an API-model agent, whose
+   * cost is recorded as a literal zero because pricing was never implemented,
+   * or an external agent that reports nothing. Kept apart from
+   * `unverifiedExecutions` because nothing went wrong here: there is simply no
+   * price, so a dollar total covering these runs is partial by construction.
+   */
+  unpricedExecutions: number;
+}
+
+/**
+ * Recorded consumption, not provider quota.
+ *
+ * "Today" is the local calendar day; "last 7 days" is the trailing 168 hours,
+ * which is deliberately not called "this week" -- it has no week boundary.
+ * Neither is a provider window, and neither may be drawn as a quota bar.
+ */
+export interface RecordedUsageWindows {
+  today: RecordedUsageRow[];
+  last7Days: RecordedUsageRow[];
+  /** Local midnight used for `today`, so the UI can explain the boundary. */
+  todayStartedAt: number;
+  computedAt: number;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -519,6 +598,8 @@ export type AppEvent =
   | { type: 'mcp-server'; server: McpServerView }
   | { type: 'mcp-server-deleted'; serverId: string }
   | { type: 'grants'; agentId: string; grants: ToolGrant[] }
+  /** A provider quota reading changed. Account-wide, not per agent. */
+  | { type: 'quota'; report: QuotaReport }
   /** An agent's activity on a message changed. */
   | { type: 'activity'; activity: MessageActivityRecord }
   /** The user's own reactions on a message changed. */

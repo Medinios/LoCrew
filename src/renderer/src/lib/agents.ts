@@ -1,4 +1,4 @@
-import type { Agent } from '@shared/types';
+import type { Agent, RuntimeType } from '@shared/types';
 import type { ProviderView } from '@shared/integrations';
 
 /**
@@ -61,3 +61,17 @@ export function modelRejectsTools(agent: Agent, providers: ProviderView[]): bool
   const tools = model.overrides.tools ?? model.capabilities.tools;
   return tools === false;
 }
+
+/**
+ * What to call a runtime's provider account in usage surfaces.
+ *
+ * `engineKind` says "Local CLI" for both CLI runtimes, which is the wrong
+ * granularity here: Claude Code and Codex bill to different accounts with
+ * different meters, so a quota heading has to name which one it is.
+ */
+export const RUNTIME_LABEL: Record<RuntimeType, string> = {
+  'claude-code': 'Claude Code',
+  codex: 'Codex',
+  model: 'API provider',
+  a2a: 'External agent',
+};

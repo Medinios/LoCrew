@@ -5,6 +5,8 @@ import type {
   AgentEvent,
   AgentEventType,
   AgentExecution,
+  CostProvenance,
+  RuntimeType,
   AppSettings,
   Conversation,
   ConversationMember,
@@ -17,11 +19,23 @@ import type {
   TaskStatus,
 } from '../../shared/types.js';
 import { DEFAULT_LIMITS, TERMINAL_EXECUTION_STATES } from '../../shared/types.js';
-import type { CostSummary } from '../../shared/ipc.js';
+import type { CostSummary, RecordedUsageRow, RecordedUsageWindows } from '../../shared/ipc.js';
 import type { Db } from './index.js';
 import * as t from './schema.js';
 
 const SETTINGS_KEY = 'app';
+
+/**
+ * Midnight today in the machine's own timezone.
+ *
+ * Built from the local calendar fields rather than by subtracting a fixed
+ * number of hours, so a day that is 23 or 25 hours long because the clocks
+ * changed still starts where the user's calendar says it does.
+ */
+export function startOfLocalDay(at: number): number {
+  const d = new Date(at);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+}
 
 /**
  * All database access in the application goes through this class. Keeping it in
@@ -493,6 +507,10 @@ export class Store {
       chainDepth: input.chainDepth,
       turns: 0,
       costUsd: 0,
+      costProvenance: 'unreported' as CostProvenance,
+      rawCostUsd: null,
+      baselineCostUsd: null,
+      nativeSessionId: null,
       inputTokens: 0,
       outputTokens: 0,
       error: null,
@@ -544,14 +562,280 @@ export class Store {
       .map(toExecution);
   }
 
-  /** Total spend recorded against one agent-to-agent chain. */
+  /**
+   * Records what one execution spent, measuring against its session's baseline.
+   *
+   * Claude Code reports `total_cost_usd` for a whole native session and this app
+   * resumes a session on every run, so the reported figure is a session total,
+   * not a run's spend. The difference is only knowable when the session's
+   * earlier total was recorded -- and this method is honest about the cases
+   * where it was not, rather than presenting a guess as a measurement.
+   *
+   * The execution row and the session baseline move together in one
+   * transaction. A crash between them would otherwise leave the baseline
+   * advanced past a run that was never credited, and every later run in that
+   * session would be undercounted for good.
+   *
+   * Idempotent on purpose. `finish()` re-applies the last cost after the cost
+   * events have already run, so the delta is always recomputed from the entry
+   * baseline frozen on the execution, never from the live one -- otherwise the
+   * second call would measure against its own result and collapse to zero.
+   *
+   * Runtimes that already report per-run figures (Codex, and the API-model
+   * runtime) pass through untouched: `measured`, with no baseline involved.
+   */
+  recordExecutionCost(input: {
+    executionId: string;
+    runtimeType: RuntimeType;
+    agentId: string;
+    conversationId: string;
+    /** Native session id reported by this run, when the runtime has one. */
+    nativeSessionId: string | null;
+    /** Whether this run asked to resume an existing session. */
+    resumeRequested: boolean;
+    /** The runtime's figure, verbatim. */
+    rawCostUsd: number;
+    inputTokens: number;
+    outputTokens: number;
+    turns: number;
+  }): AgentExecution {
+    const {
+      executionId,
+      runtimeType,
+      agentId,
+      conversationId,
+      nativeSessionId,
+      resumeRequested,
+      rawCostUsd,
+      inputTokens,
+      outputTokens,
+      turns,
+    } = input;
+
+    this.db.transaction((tx) => {
+      const tokens = { inputTokens, outputTokens, turns };
+      const write = (patch: {
+        costUsd: number;
+        baselineCostUsd: number | null;
+        costProvenance: CostProvenance;
+      }) =>
+        tx
+          .update(t.agentExecutions)
+          .set({ ...tokens, ...patch, rawCostUsd, nativeSessionId })
+          .where(eq(t.agentExecutions.id, executionId))
+          .run();
+
+      // Runtimes that report no cost at all. An API-model agent records a
+      // literal zero because pricing was never implemented, and an external
+      // agent reports nothing. Calling either "measured" would turn "we never
+      // priced this" into "this was free", which is the opposite of true.
+      if (runtimeType === 'model' || runtimeType === 'a2a') {
+        write({ costUsd: rawCostUsd, baselineCostUsd: null, costProvenance: 'unpriced' });
+        return;
+      }
+
+      // Codex accumulates from zero inside each execution, so its figure is
+      // already this run's own spend.
+      if (runtimeType !== 'claude-code') {
+        write({ costUsd: rawCostUsd, baselineCostUsd: null, costProvenance: 'measured' });
+        return;
+      }
+
+      // Claude Code reports a session cumulative, so without a session id there
+      // is nothing to anchor it to. Whether that matters depends on whether
+      // anything came before: a run that resumed nothing started from zero, so
+      // its cumulative is its own spend. A run that asked to resume did have a
+      // history, and its figure covers a span we cannot separate.
+      if (!nativeSessionId) {
+        write(
+          resumeRequested
+            ? { costUsd: 0, baselineCostUsd: null, costProvenance: 'ambiguous' }
+            : { costUsd: rawCostUsd, baselineCostUsd: 0, costProvenance: 'measured' },
+        );
+        return;
+      }
+
+      const current = tx
+        .select({
+          baselineCostUsd: t.agentExecutions.baselineCostUsd,
+          costProvenance: t.agentExecutions.costProvenance,
+        })
+        .from(t.agentExecutions)
+        .where(eq(t.agentExecutions.id, executionId))
+        .get();
+
+      const key = and(
+        eq(t.sessionCostBaselines.runtimeType, runtimeType),
+        eq(t.sessionCostBaselines.agentId, agentId),
+        eq(t.sessionCostBaselines.conversationId, conversationId),
+        eq(t.sessionCostBaselines.runtimeSessionId, nativeSessionId),
+      );
+      const stored = tx.select().from(t.sessionCostBaselines).where(key).get();
+
+      let entryBaseline = current?.baselineCostUsd ?? null;
+      let provenance: CostProvenance = current?.costProvenance ?? 'ambiguous';
+      /** Where the session's counter ends up, and whether we trust it. */
+      let sessionRaw = Math.max(stored?.rawCostUsd ?? 0, rawCostUsd);
+      let sessionUncertain = stored?.uncertain ?? false;
+
+      if (entryBaseline === null) {
+        if (stored && !stored.uncertain) {
+          // Watched before and trusted: the difference is real.
+          entryBaseline = stored.rawCostUsd;
+          provenance = 'measured';
+        } else if (stored) {
+          // The session's recorded position is only a lower bound, because
+          // something before it reported zero while possibly having spent. Any
+          // difference measured from it would silently absorb that run's spend,
+          // so this run re-anchors and claims nothing.
+          entryBaseline = rawCostUsd;
+          provenance = 'ambiguous';
+          sessionUncertain = false;
+          sessionRaw = rawCostUsd;
+        } else if (!resumeRequested) {
+          // Nobody asked to resume, so the session really did start at zero.
+          entryBaseline = 0;
+          provenance = 'measured';
+        } else {
+          // A session that already existed before this accounting watched it --
+          // one predating the change, or a fork we cannot tell from a fresh
+          // session. Its earlier total was never recorded, so this run's spend
+          // cannot be recovered. It anchors the next run and claims nothing.
+          entryBaseline = rawCostUsd;
+          provenance = 'baseline_only';
+        }
+      }
+
+      let costUsd = rawCostUsd - entryBaseline;
+
+      if (rawCostUsd === 0 && entryBaseline > 0) {
+        // A crashed or startup-failed result reports zero -- but it may still
+        // have spent before dying. The session's true position is therefore
+        // unknown, so it is flagged and the next run re-anchors instead of
+        // measuring a difference that would quietly include this run's spend.
+        costUsd = 0;
+        provenance = 'ambiguous';
+        sessionUncertain = true;
+        sessionRaw = stored?.rawCostUsd ?? entryBaseline;
+      } else if (costUsd < 0) {
+        // The counter went backwards: a mid-run reset. What was spent before it
+        // is in no figure we hold. The session's counter genuinely restarted,
+        // so the stored high-water mark must follow it down -- leaving it at the
+        // old peak would keep every later run ambiguous until that peak was
+        // passed again.
+        costUsd = 0;
+        provenance = 'ambiguous';
+        sessionRaw = rawCostUsd;
+        sessionUncertain = false;
+      }
+
+      write({ costUsd, baselineCostUsd: entryBaseline, costProvenance: provenance });
+
+      const row = { rawCostUsd: sessionRaw, uncertain: sessionUncertain, updatedAt: Date.now() };
+      if (stored) {
+        tx.update(t.sessionCostBaselines).set(row).where(key).run();
+      } else {
+        tx.insert(t.sessionCostBaselines)
+          .values({
+            runtimeType,
+            agentId,
+            conversationId,
+            runtimeSessionId: nativeSessionId,
+            ...row,
+          })
+          .run();
+      }
+    });
+
+    const execution = this.getExecution(executionId);
+    if (!execution) throw new Error(`Execution ${executionId} no longer exists.`);
+    return execution;
+  }
+
+  /**
+   * Total spend recorded against one agent-to-agent chain, for the spend limit.
+   *
+   * This is a ceiling, so where spend is unknown the answer must never be a
+   * number smaller than the truth: stopping a chain early is recoverable,
+   * letting it run past its budget is not.
+   *
+   *  - `measured` contributes its real figure.
+   *  - `legacy` and `baseline_only` contribute their raw reported total, which
+   *    for a Claude Code session cumulative is a genuine upper bound on what
+   *    that run could have spent.
+   *  - `ambiguous` splits in two, and it is **not** true that every ambiguous
+   *    cost is unbounded. Where the run's figure still covers its own spend --
+   *    a cumulative for a span we could not identify -- that figure is a real
+   *    ceiling and is used. Only where the session had already reached a
+   *    positive total and the run then reported the same or less is the missing
+   *    amount bounded by nothing we hold: a zeroed result may have spent before
+   *    dying, and a reset run's pre-reset spend is in no figure at all. Those
+   *    return Infinity so the limit fails closed rather than reading a silent
+   *    zero as "nothing was spent". A human message starts a new chain, so this
+   *    stops a cascade rather than wedging the app.
+   *  - `unreported` depends on evidence. If the run produced output -- text,
+   *    reasoning or a tool call, none of which can happen before model work --
+   *    then it spent something unknowable, and the limit fails closed. With no
+   *    such evidence it contributes nothing, so a run that failed before
+   *    reaching the model does not wedge its chain.
+   *
+   * This is therefore conservative where there is evidence and **best effort
+   * where there is not**: a run that spent and produced no observable output
+   * before dying still contributes zero. That is a real bound on this limit,
+   * not a guarantee against it.
+   *  - `unpriced` contributes zero, because no price exists to contribute. This
+   *    is a real gap in enforcement for API-model agents and it predates this
+   *    change; it is recorded in the usage report rather than hidden here.
+   */
   chainCostUsd(chainId: string): number {
     const row = this.db
-      .select({ total: sql<number>`COALESCE(SUM(${t.agentExecutions.costUsd}), 0)` })
+      .select({
+        bounded: sql<number>`COALESCE(SUM(
+          CASE ${t.agentExecutions.costProvenance}
+            WHEN 'measured' THEN ${t.agentExecutions.costUsd}
+            WHEN 'unpriced' THEN 0
+            -- Handled below: whether a run that reported nothing still spent
+            -- depends on evidence outside this row.
+            WHEN 'unreported' THEN 0
+            ELSE COALESCE(${t.agentExecutions.rawCostUsd}, ${t.agentExecutions.costUsd})
+          END), 0)`,
+        unbounded: sql<number>`COALESCE(SUM(
+          CASE
+            WHEN ${t.agentExecutions.costProvenance} = 'ambiguous'
+             AND ${t.agentExecutions.baselineCostUsd} IS NOT NULL
+             AND ${t.agentExecutions.baselineCostUsd} > 0
+             AND COALESCE(${t.agentExecutions.rawCostUsd}, 0) <= ${t.agentExecutions.baselineCostUsd}
+            THEN 1
+            -- A run that reported no usage, but demonstrably reached the model.
+            -- These event types cannot be produced before model work begins, so
+            -- their presence is affirmative evidence that something was spent
+            -- even though no figure ever arrived.
+            --
+            -- Only for runtimes that report cost at all. A model or external
+            -- agent has no price whatever it did, so its missing figure is not
+            -- unbounded spend -- it is the absence of pricing, and blocking a
+            -- chain over it would stop work for a cost that does not exist.
+            WHEN ${t.agentExecutions.costProvenance} = 'unreported'
+             AND EXISTS (
+               SELECT 1 FROM agents
+               WHERE agents.id = agent_executions.agent_id
+                 AND agents.runtime_type IN ('claude-code', 'codex')
+             )
+             AND EXISTS (
+               SELECT 1 FROM agent_events
+               WHERE agent_events.execution_id = agent_executions.id
+                 AND agent_events.type IN ('text', 'text_delta', 'thinking', 'tool_use')
+             )
+            THEN 1
+            ELSE 0
+          END), 0)`,
+      })
       .from(t.agentExecutions)
       .where(eq(t.agentExecutions.chainId, chainId))
       .get();
-    return row?.total ?? 0;
+
+    if ((row?.unbounded ?? 0) > 0) return Number.POSITIVE_INFINITY;
+    return row?.bounded ?? 0;
   }
 
   /** How many executions this chain has already produced. */
@@ -647,15 +931,35 @@ export class Store {
 
   /* ----------------------------------------------------------------- costs */
 
-  costSummary(): CostSummary {
+  costSummary(now: number = Date.now()): CostSummary {
+    // One basis everywhere: these rows sum measured spend only, exactly like
+    // the windows below. Two totals on one screen computed differently is a
+    // bug the user has to notice for us, and they should not have to.
+    const measured = sql<number>`COALESCE(SUM(
+      CASE WHEN ${t.agentExecutions.costProvenance} = 'measured'
+        THEN ${t.agentExecutions.costUsd} ELSE 0 END), 0)`;
+
+    // Coverage travels with every total. A sum of measured spend beside a count
+    // of runs nobody could measure is the only honest way to show it; the
+    // number alone would read as the whole story.
+    const unverified = sql<number>`COALESCE(SUM(
+      CASE WHEN ${t.agentExecutions.costProvenance} IN ('legacy', 'baseline_only', 'ambiguous')
+        THEN 1 ELSE 0 END), 0)`;
+    const unavailable = sql<number>`COALESCE(SUM(
+      CASE WHEN ${t.agentExecutions.costProvenance} = 'unreported'
+            AND ${t.agentExecutions.endedAt} IS NOT NULL
+        THEN 1 ELSE 0 END), 0)`;
+    const unpriced = sql<number>`COALESCE(SUM(
+      CASE WHEN ${t.agentExecutions.costProvenance} = 'unpriced' THEN 1 ELSE 0 END), 0)`;
+
     const total = this.db
-      .select({ total: sql<number>`COALESCE(SUM(${t.agentExecutions.costUsd}), 0)` })
+      .select({ total: measured, unverified, unavailable, unpriced })
       .from(t.agentExecutions)
       .get();
 
-    const since = Date.now() - 24 * 60 * 60 * 1000;
+    const since = now - 24 * 60 * 60 * 1000;
     const recent = this.db
-      .select({ total: sql<number>`COALESCE(SUM(${t.agentExecutions.costUsd}), 0)` })
+      .select({ total: measured, unverified, unavailable, unpriced })
       .from(t.agentExecutions)
       .where(sql`${t.agentExecutions.startedAt} >= ${since}`)
       .get();
@@ -663,7 +967,7 @@ export class Store {
     const byAgent = this.db
       .select({
         agentId: t.agentExecutions.agentId,
-        costUsd: sql<number>`COALESCE(SUM(${t.agentExecutions.costUsd}), 0)`,
+        costUsd: measured,
         executions: sql<number>`COUNT(*)`,
       })
       .from(t.agentExecutions)
@@ -672,9 +976,107 @@ export class Store {
 
     return {
       totalUsd: total?.total ?? 0,
+      totalCoverage: {
+        unverifiedExecutions: total?.unverified ?? 0,
+        unavailableExecutions: total?.unavailable ?? 0,
+        unpricedExecutions: total?.unpriced ?? 0,
+      },
       last24hUsd: recent?.total ?? 0,
+      last24hCoverage: {
+        unverifiedExecutions: recent?.unverified ?? 0,
+        unavailableExecutions: recent?.unavailable ?? 0,
+        unpricedExecutions: recent?.unpriced ?? 0,
+      },
       byAgent,
+      windows: this.recordedUsage(now),
     };
+  }
+
+  /**
+   * Recorded consumption per agent for the two windows the UI shows.
+   *
+   * An execution is attributed whole to the window containing its `startedAt`.
+   * A run that straddles local midnight therefore counts against the day it
+   * began: splitting it would mean inventing a distribution of spend across
+   * time that nothing in the data supports.
+   *
+   * Aggregated from `agent_executions` rows, never from `agent_events`. A row
+   * already holds the run's final running total, while the events table holds
+   * every intermediate total for the same run -- summing those would count the
+   * same spend many times over.
+   *
+   * Failed, cancelled and timed-out runs are included. The tokens were spent.
+   */
+  recordedUsage(now: number = Date.now()): RecordedUsageWindows {
+    const dayStart = startOfLocalDay(now);
+    return {
+      today: this.usageBetween(dayStart, now),
+      last7Days: this.usageBetween(now - 7 * 24 * 60 * 60 * 1000, now),
+      todayStartedAt: dayStart,
+      computedAt: now,
+    };
+  }
+
+  /**
+   * Both ends are bounded. The upper bound is not redundant: a clock that was
+   * wrong, or moved backwards, leaves rows stamped in the future, and those
+   * would otherwise land in every window forever.
+   *
+   * Only `measured` rows contribute to the total. Everything else is counted
+   * but not summed, because a figure that blends measured spend with spend
+   * nobody recorded is not a total -- it is a guess wearing a total's clothes.
+   * The caller gets both numbers and says so on screen.
+   */
+  private usageBetween(since: number, until: number): RecordedUsageRow[] {
+    return this.db
+      .select({
+        agentId: t.agentExecutions.agentId,
+        costUsd: sql<number>`COALESCE(SUM(
+          CASE WHEN ${t.agentExecutions.costProvenance} = 'measured'
+            THEN ${t.agentExecutions.costUsd} ELSE 0 END), 0)`,
+        inputTokens: sql<number>`COALESCE(SUM(${t.agentExecutions.inputTokens}), 0)`,
+        outputTokens: sql<number>`COALESCE(SUM(${t.agentExecutions.outputTokens}), 0)`,
+        executions: sql<number>`COUNT(*)`,
+        /**
+         * Runs whose spend is not known: recorded before this accounting
+         * existed, or a session first seen mid-flight, or a counter that moved
+         * in a way we cannot read. Only counted for runtimes that report cost
+         * at all -- a model agent reporting zero is a separate, known state.
+         */
+        unverifiedExecutions: sql<number>`COALESCE(SUM(
+          CASE WHEN ${t.agentExecutions.costProvenance} IN ('legacy', 'baseline_only', 'ambiguous')
+            THEN 1 ELSE 0 END), 0)`,
+        /**
+         * Finished runs on a cost-reporting runtime that reported no usage at
+         * all.
+         *
+         * Kept apart from the unverified count because the reason differs and
+         * so should the wording: those runs reported a figure we could not
+         * anchor, these reported nothing. An earlier version excluded them when
+         * tokens were zero, on the theory that meant no model work -- but
+         * tokens are written by the same event as the cost, so no report is
+         * exactly why tokens stay zero. That test proved nothing.
+         */
+        unavailableExecutions: sql<number>`COALESCE(SUM(
+          CASE WHEN ${t.agentExecutions.costProvenance} = 'unreported'
+                AND ${t.agentExecutions.endedAt} IS NOT NULL
+                AND ${t.agents.runtimeType} IN ('claude-code', 'codex')
+            THEN 1 ELSE 0 END), 0)`,
+        /**
+         * Runs on a runtime this app cannot price at all. Distinct from the
+         * unverified count: nothing failed here, there simply is no price, so
+         * any dollar total covering these runs is partial by construction.
+         */
+        unpricedExecutions: sql<number>`COALESCE(SUM(
+          CASE WHEN ${t.agentExecutions.costProvenance} = 'unpriced' THEN 1 ELSE 0 END), 0)`,
+      })
+      .from(t.agentExecutions)
+      .innerJoin(t.agents, eq(t.agents.id, t.agentExecutions.agentId))
+      .where(
+        sql`${t.agentExecutions.startedAt} >= ${since} AND ${t.agentExecutions.startedAt} <= ${until}`,
+      )
+      .groupBy(t.agentExecutions.agentId)
+      .all();
   }
 
   /**
@@ -743,6 +1145,7 @@ function toExecution(row: typeof t.agentExecutions.$inferSelect): AgentExecution
     triggeredByMessageId: row.triggeredByMessageId,
     turns: row.turns,
     costUsd: row.costUsd,
+    costProvenance: row.costProvenance,
     inputTokens: row.inputTokens,
     outputTokens: row.outputTokens,
     error: row.error,
