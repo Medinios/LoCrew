@@ -24,6 +24,9 @@ import { SessionAccessManager } from './security/session-access.js';
 import { ApprovalManager } from './approvals/manager.js';
 import { previewFileChange } from './approvals/diff.js';
 import { Orchestrator } from './orchestrator/orchestrator.js';
+import { QuotaManager } from './quota/manager.js';
+import { ClaudeQuotaSource } from './quota/claude.js';
+import { CodexQuotaSource } from './quota/codex.js';
 import { ClaudeCodeAdapter } from './runtimes/claude-code.js';
 import { CodexAdapter } from './runtimes/codex.js';
 import type { AgentRuntime, ApprovalDecision, ApprovalRequest } from './runtimes/types.js';
@@ -59,6 +62,7 @@ let gateway: GatewayServer | null = null;
 let orchestrator: Orchestrator | null = null;
 let runtimeAdapters: Map<RuntimeType, AgentRuntime> | null = null;
 let mcpManager: McpClientManager | null = null;
+let quota: QuotaManager | null = null;
 /** Temporary write permissions. In memory only: a restart returns to asking. */
 let sessionAccess: SessionAccessManager | null = null;
 /** Operations waiting for the operator's answer in the app's own dialog. */
@@ -472,6 +476,15 @@ async function bootstrap(): Promise<void> {
     sessionAccess: sessions,
   });
 
+  // Provider quota is billed to a login, not to an agent, so readings are
+  // cached per runtime type and every agent of that runtime shares one. Only
+  // runtimes that actually have agents are ever asked.
+  quota = new QuotaManager({
+    sources: [new ClaudeQuotaSource(), new CodexQuotaSource()],
+    activeRuntimes: () => [...new Set(store.listAgents().map((a) => a.runtimeType))],
+    onChange: (report) => emit({ type: 'quota', report }),
+  });
+
   locks.onChange((current) => emit({ type: 'locks', locks: current }));
 
   // Reflect each agent's real availability instead of leaving the roster on
@@ -494,6 +507,7 @@ async function bootstrap(): Promise<void> {
     providers,
     mcp,
     orchestrator,
+    quota,
     sessionAccess: sessions,
     approvals: pendingApprovals,
     runtimes,
@@ -559,6 +573,9 @@ app.on('before-quit', async (event) => {
   event.preventDefault();
 
   try {
+    // Cancel any in-flight usage read first: it owns a child process, and a
+    // meter check must never hold up quitting.
+    quota?.dispose();
     await orchestrator?.shutdown();
     await mcpManager?.shutdown();
     await gateway?.stop();
@@ -572,6 +589,7 @@ app.on('before-quit', async (event) => {
     database = null;
     runtimeAdapters = null;
     mcpManager = null;
+    quota = null;
     removeIpcHandlers();
     app.quit();
   }

@@ -72,9 +72,15 @@ export function evaluateActivation(
   }
 
   if (limits.maxChainCostUsd > 0 && request.chainCostUsd >= limits.maxChainCostUsd) {
+    // An unbounded figure means a run in this chain spent something nobody can
+    // put a ceiling on -- a crashed result, or a session we could not identify.
+    // The limit fails closed rather than guessing low, so say that plainly
+    // instead of printing "$Infinity".
     return {
       allowed: false,
-      reason: `this chain has spent $${request.chainCostUsd.toFixed(2)} (limit $${limits.maxChainCostUsd.toFixed(2)})`,
+      reason: Number.isFinite(request.chainCostUsd)
+        ? `this chain has spent $${request.chainCostUsd.toFixed(2)} (limit $${limits.maxChainCostUsd.toFixed(2)})`
+        : `a run in this chain reported an amount that could not be measured, so the $${limits.maxChainCostUsd.toFixed(2)} limit cannot be checked safely`,
     };
   }
 

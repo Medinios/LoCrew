@@ -318,7 +318,13 @@ export interface AgentExecution {
   trigger: 'human' | 'agent' | 'system';
   triggeredByMessageId: string | null;
   turns: number;
+  /**
+   * This run's own spend when `costProvenance` is `measured`. Read the
+   * provenance before summing: for every other value this is not a measurement
+   * of this run, and adding it to a total would state something untrue.
+   */
   costUsd: number;
+  costProvenance: CostProvenance;
   inputTokens: number;
   outputTokens: number;
   error: string | null;
@@ -428,3 +434,40 @@ export const DEFAULT_AGENT_CONFIG: AgentConfig = {
 
 /** The single local human participant. */
 export const LOCAL_USER_ID = 'user:local';
+
+/**
+ * How far an execution's recorded cost can be trusted.
+ *
+ * Claude Code reports a cumulative figure for its whole native session, so a
+ * run's own spend is only knowable when the session's earlier total was
+ * recorded. These four states say whether it was, because a total that mixes
+ * measured and unknowable spend is not a total worth showing.
+ *
+ *  - `measured`: the baseline was known; the recorded cost is this run's spend.
+ *  - `baseline_only`: first sighting of an already-running session. The run set
+ *    a baseline for the next one, but its own spend cannot be recovered.
+ *  - `ambiguous`: the runtime's counter fell, reported zero, or ran without a
+ *    session to measure against. A reset and a crashed result look identical
+ *    from here, so nothing is claimed and no bound can be put on the spend.
+ *  - `unpriced`: the runtime reports no cost at all. An API-model agent records
+ *    a literal zero because pricing is not implemented, and an external agent
+ *    reports nothing -- neither is a measured zero, and calling it one would
+ *    turn "we never priced this" into "this was free".
+ *  - `unreported`: the run ended without any usage report. Usually it failed
+ *    before reaching the model, in which case nothing was spent -- but that
+ *    cannot be assumed, so it is only treated as unverified when tokens were
+ *    reported, which is evidence that model work really happened.
+ *  - `legacy`: recorded before per-execution accounting existed.
+ */
+export type CostProvenance =
+  | 'measured'
+  | 'baseline_only'
+  | 'ambiguous'
+  | 'unpriced'
+  | 'unreported'
+  | 'legacy';
+
+/** Provenances whose cost is a real measurement of one run. */
+export function isMeasuredCost(provenance: CostProvenance): boolean {
+  return provenance === 'measured';
+}

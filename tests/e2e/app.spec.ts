@@ -14,11 +14,21 @@ let app: ElectronApplication;
 let page: Page;
 let userDataDir: string;
 
-/** Electron env without ELECTRON_RUN_AS_NODE, which would start it in Node mode. */
+/**
+ * Variables that must not reach the Electron under test.
+ *
+ * `ELECTRON_RUN_AS_NODE` would start it headless, as a plain Node process.
+ * `ELECTRON_RENDERER_URL` is subtler and cost a whole debugging session: when
+ * it is set, `main/index.ts` loads the renderer from the Vite dev server
+ * instead of the build. A contributor with `npm run dev` running therefore
+ * tests a stale renderer from another checkout and sees phantom failures in
+ * features that are present and working.
+ */
+const HOSTILE_ENV = ['ELECTRON_RUN_AS_NODE', 'ELECTRON_RENDERER_URL'];
 function guiEnv(): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
-    if (key === 'ELECTRON_RUN_AS_NODE') continue;
+    if (HOSTILE_ENV.includes(key)) continue;
     if (value !== undefined) env[key] = value;
   }
   return env;

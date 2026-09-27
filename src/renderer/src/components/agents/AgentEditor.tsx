@@ -18,10 +18,12 @@ import {
   toolsUnavailableReason,
   type AgentDraft,
 } from '@/components/agents/fields';
-import { engineLabel } from '@/lib/agents';
+import { RUNTIME_LABEL, engineLabel } from '@/lib/agents';
 import { CREW_STATUS, EXECUTION_LABEL } from '@/lib/lexicon';
 import { cn } from '@/lib/utils';
 import { invoke, useApp } from '@/stores/app';
+import { QuotaSection } from '@/components/usage/QuotaBars';
+import { UsageBreakdown } from '@/components/usage/RecordedUsage';
 
 const NO_GRANTS: ToolGrant[] = [];
 
@@ -40,6 +42,10 @@ export function AgentEditor({ agentId, onOpenChange }: { agentId: string | null;
   const providers = useApp((s) => s.providers);
   const executions = useApp((s) => s.executions);
   const refreshAgents = useApp((s) => s.refreshAgents);
+  const costs = useApp((s) => s.costs);
+  const quota = useApp((s) => s.quota);
+  const refreshQuota = useApp((s) => s.refreshQuota);
+  const agentsAll = useApp((s) => s.agents);
   const refreshConversations = useApp((s) => s.refreshConversations);
 
   const [draft, setDraft] = useState<AgentDraft | null>(null);
@@ -65,6 +71,19 @@ export function AgentEditor({ agentId, onOpenChange }: { agentId: string | null;
   }, [agent?.id]);
 
   const original = useMemo(() => (agent ? draftFromAgent(agent, grants) : null), [agent, grants]);
+
+  // Opening an agent is a usage surface, so it refreshes an expired reading.
+  // Not forced: a reading taken minutes ago is reused rather than refetched.
+  useEffect(() => {
+    if (agent) void refreshQuota(false);
+  }, [agent?.id, refreshQuota]);
+
+  // Quota belongs to the login, so the panel here is the same account-wide
+  // reading the right panel shows -- not a slice belonging to this agent.
+  const quotaSnapshot = agent ? quota[agent.runtimeType] : undefined;
+  const sharingAgents = agent
+    ? agentsAll.filter((a) => a.runtimeType === agent.runtimeType).length
+    : 0;
 
   if (!agent || !draft || !original) return null;
 
@@ -238,6 +257,22 @@ export function AgentEditor({ agentId, onOpenChange }: { agentId: string | null;
             ) : null}
           </section>
         ) : null}
+
+        <section className="space-y-2">
+          <SectionTitle>Usage</SectionTitle>
+          <div className="rounded-lg border border-line px-3 py-2.5">
+            <UsageBreakdown agent={agent} windows={costs?.windows} />
+          </div>
+          {quotaSnapshot ? (
+            <div className="rounded-lg border border-line px-1.5 py-1">
+              <QuotaSection
+                title={`${RUNTIME_LABEL[agent.runtimeType]} plan`}
+                snapshot={quotaSnapshot}
+                agentCount={sharingAgents}
+              />
+            </div>
+          ) : null}
+        </section>
 
         {error ? <p className="rounded-lg bg-danger/[0.06] px-3 py-2 text-2xs text-danger">{error}</p> : null}
 

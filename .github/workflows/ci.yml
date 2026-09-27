@@ -1,0 +1,85 @@
+# Continuous integration for pull requests and pushes to main.
+#
+# Deliberately small. It runs the two commands a contributor is asked to run
+# before opening a pull request, on the two platforms the project has been used
+# on, plus the end-to-end suite once on Linux. It does not build installers,
+# does not run the live-runtime tests (those spend real credit against your own
+# accounts), and needs no secrets.
+#
+# Actions are pinned to full commit SHAs rather than tags: a tag can be moved to
+# point at different code, a commit SHA cannot. The comment beside each one says
+# which release it is, so the pin stays readable when it comes time to bump it.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Read-only. No secrets are used, and a pull request from a fork must not be
+# able to obtain more than this.
+permissions:
+  contents: read
+
+# A new push supersedes the previous run for the same ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Typecheck and tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One platform failing should not hide the result on the other.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Node 22: every dependency's `engines` asks for >=20 (@playwright/test is
+      # the strictest), and the project itself declares none. Pinning to a
+      # single version keeps the two platforms comparable.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: npm
+
+      # `npm ci` installs from the lockfile and fails if it disagrees with
+      # package.json. The postinstall step rebuilds better-sqlite3 against
+      # Electron's ABI, which the tests need: they run under Electron in Node
+      # mode, not under plain Node.
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      # Unit, integration and renderer tests. Contacts no paid service.
+      - run: npm test
+
+  e2e:
+    name: End-to-end (Linux)
+    runs-on: ubuntu-latest
+    # Only worth the minutes once the cheap checks have passed.
+    needs: checks
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      # The end-to-end tests drive the built app, so the build has to happen
+      # first - a stale or missing `out/` would test nothing, or the wrong
+      # thing. `npm run build` runs typecheck itself before bundling.
+      - run: npm run build
+
+      # Electron needs a display even though no human is watching, so this job
+      # only works on a runner that provides xvfb. Playwright drives Electron
+      # directly here and installs no browsers.
+      - run: xvfb-run --auto-servernum npm run test:e2e

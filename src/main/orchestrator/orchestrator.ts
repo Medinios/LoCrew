@@ -518,6 +518,18 @@ export class Orchestrator implements GatewayServices {
     let lastCost = { costUsd: 0, inputTokens: 0, outputTokens: 0 };
     let fatalError: string | null = null;
     let turns = 0;
+    /** The native session this run reported, once it has. */
+    let nativeSessionId: string | null = null;
+    /** Whether this run asked to resume an existing session. */
+    let resumeSessionId: string | null = null;
+    /**
+     * Whether the runtime ever reported usage.
+     *
+     * Without this, `finish()` would apply the zero `lastCost` starts at and a
+     * run that reported nothing would be written down as a measured $0.00 --
+     * indistinguishable from a run that genuinely cost nothing.
+     */
+    let sawCostEvent = false;
 
     const record = (type: RuntimeEvent['type'], payload: Record<string, unknown>) => {
       const event = store.appendEvent(job.executionId, seq++, type, payload);
@@ -563,7 +575,7 @@ export class Orchestrator implements GatewayServices {
       );
 
       const { prompt, images } = this.buildTurnPrompt(job, agent);
-      const resumeSessionId = store.getRuntimeSessionId(agent.id, job.conversationId);
+      resumeSessionId = store.getRuntimeSessionId(agent.id, job.conversationId);
 
       const stream = runtime.execute({
         executionId: job.executionId,
@@ -614,6 +626,11 @@ export class Orchestrator implements GatewayServices {
       for await (const event of stream) {
         switch (event.type) {
           case 'session':
+            // Recorded before any cost arrives -- the adapter emits this on the
+            // first message carrying a session id, and cost only on the result
+            // -- so the session a run belongs to is always known in time to
+            // measure its spend against that session's baseline.
+            nativeSessionId = event.sessionId;
             store.saveRuntimeSessionId({
               agentId: agent.id,
               conversationId: job.conversationId,
@@ -659,12 +676,22 @@ export class Orchestrator implements GatewayServices {
             break;
 
           case 'cost':
-            // A `cost` event is a running total by contract (see RuntimeEvent),
-            // so this replaces rather than adds.
+            // A `cost` event is a running total by contract (see RuntimeEvent).
+            // For Claude Code that total spans the whole native session, not
+            // this run, so the store measures it against the session's baseline
+            // and records how far the result can be trusted. Both writes happen
+            // in one transaction there.
             lastCost = event;
+            sawCostEvent = true;
             if (event.turns !== undefined) turns = event.turns;
-            store.updateExecution(job.executionId, {
-              costUsd: event.costUsd,
+            store.recordExecutionCost({
+              executionId: job.executionId,
+              runtimeType: agent.runtimeType,
+              agentId: agent.id,
+              conversationId: job.conversationId,
+              nativeSessionId,
+              resumeRequested: resumeSessionId !== null,
+              rawCostUsd: event.costUsd,
               inputTokens: event.inputTokens,
               outputTokens: event.outputTokens,
               turns,
@@ -765,7 +792,17 @@ export class Orchestrator implements GatewayServices {
       state,
       fatalError,
       aborted && !active.cancelledByHuman ? 'The execution timed out.' : null,
-      { ...lastCost, turns },
+      // The raw figure again, not the measured delta: finish() re-applies it
+      // through the same accounting path, which recomputes from the entry
+      // baseline frozen on the execution. Writing `lastCost` straight onto the
+      // row here would overwrite a measured delta with a session cumulative.
+      //
+      // Omitted entirely when nothing was reported, so the run keeps its
+      // "no usage reported" state instead of being credited with a measured
+      // zero it never earned.
+      sawCostEvent
+        ? { ...lastCost, turns, agent, conversationId: job.conversationId, nativeSessionId, resumeSessionId }
+        : undefined,
     );
   }
 
@@ -980,20 +1017,43 @@ export class Orchestrator implements GatewayServices {
     state: ExecutionState,
     error: string | null,
     timeoutNote: string | null = null,
-    cost?: { costUsd: number; inputTokens: number; outputTokens: number; turns?: number },
+    cost?: {
+      costUsd: number;
+      inputTokens: number;
+      outputTokens: number;
+      turns?: number;
+      agent: Agent;
+      conversationId: string;
+      nativeSessionId: string | null;
+      resumeSessionId: string | null;
+    },
   ): void {
-    const patch: Partial<AgentExecution> = {
+    // The last cost goes through the accounting path, not straight onto the
+    // row. `costUsd` here is the runtime's raw figure, which for Claude Code is
+    // a session cumulative -- assigning it directly would undo the measurement
+    // the cost events already made. The store recomputes from the entry
+    // baseline it froze on the execution, so applying the same figure twice is
+    // safe and lands on the same delta.
+    if (cost) {
+      this.deps.store.recordExecutionCost({
+        executionId: job.executionId,
+        runtimeType: cost.agent.runtimeType,
+        agentId: cost.agent.id,
+        conversationId: cost.conversationId,
+        nativeSessionId: cost.nativeSessionId,
+        resumeRequested: cost.resumeSessionId !== null,
+        rawCostUsd: cost.costUsd,
+        inputTokens: cost.inputTokens,
+        outputTokens: cost.outputTokens,
+        turns: cost.turns ?? 0,
+      });
+    }
+
+    const execution = this.deps.store.updateExecution(job.executionId, {
       state,
       error: error ?? timeoutNote,
       endedAt: Date.now(),
-    };
-    if (cost) {
-      patch.costUsd = cost.costUsd;
-      patch.inputTokens = cost.inputTokens;
-      patch.outputTokens = cost.outputTokens;
-      if (cost.turns !== undefined) patch.turns = cost.turns;
-    }
-    const execution = this.deps.store.updateExecution(job.executionId, patch);
+    });
     this.deps.emit({ type: 'execution', execution });
 
     const outcome: RunOutcome =

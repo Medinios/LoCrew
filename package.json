@@ -1,11 +1,11 @@
 {
   "name": "locrew",
   "productName": "LoCrew",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "LoCrew - Your local agent team. A local-first workspace where AI agents work together with you as first-class participants.",
   "main": "./out/main/index.js",
   "author": "Sam",
-  "license": "MIT",
+  "license": "UNLICENSED",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "npm run typecheck && electron-vite build",

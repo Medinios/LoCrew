@@ -7,10 +7,12 @@ import {
   Trash2,
   UserMinus,
   UserPlus,
+  RefreshCw,
   X,
 } from 'lucide-react';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import type { Task } from '@shared/types';
+import type { RuntimeType, Task } from '@shared/types';
+import type { QuotaSnapshot } from '@shared/quota';
 import {
   Avatar,
   Button,
@@ -21,12 +23,17 @@ import {
   PRESENCE_LABEL,
 } from '@/components/ui/primitives';
 import { agentPresence, describeAgentActivity } from '@/lib/activity';
-import { engineLabel } from '@/lib/agents';
+import { RUNTIME_LABEL, engineLabel } from '@/lib/agents';
 import { HOLD_ACCESS, SHIP, TASK_LABEL } from '@/lib/lexicon';
 import { UserAvatar } from '@/components/ui/UserAvatar';
 import { displayNameOf } from '@/lib/people';
 import { cn, formatUsd } from '@/lib/utils';
 import { invoke, useApp } from '@/stores/app';
+import { QuotaSection } from '@/components/usage/QuotaBars';
+import { UsageChips, describeTotal } from '@/components/usage/RecordedUsage';
+
+/** Before the first summary arrives there is nothing known to be missing. */
+const NO_COVERAGE = { unverifiedExecutions: 0, unavailableExecutions: 0, unpricedExecutions: 0 };
 
 /** Shared empty arrays so selectors never hand React a new reference. */
 const NO_TASKS: Task[] = [];
@@ -46,6 +53,9 @@ export function RightPanel({ conversationId }: { conversationId: string }) {
   const costs = useApp((s) => s.costs);
   const settings = useApp((s) => s.settings);
   const refreshCosts = useApp((s) => s.refreshCosts);
+  const quota = useApp((s) => s.quota);
+  const quotaRefreshing = useApp((s) => s.quotaRefreshing);
+  const refreshQuota = useApp((s) => s.refreshQuota);
   const setEditingAgent = useApp((s) => s.setEditingAgent);
   const setPanel = useApp((s) => s.setPanel);
   const liveActivity = useApp((s) => s.liveActivity);
@@ -56,9 +66,60 @@ export function RightPanel({ conversationId }: { conversationId: string }) {
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
 
+  // Keyed on what actually changes when spend changes, not on how many runs
+  // exist: a cost update, or a run finishing without the list length moving,
+  // still has to reach the chips.
+  const executionSignature = useMemo(
+    () => executions.map((e) => `${e.id}:${e.state}:${e.costUsd}`).join('|'),
+    [executions],
+  );
+
   useEffect(() => {
     void refreshCosts();
-  }, [executions.length, refreshCosts]);
+  }, [executionSignature, refreshCosts]);
+
+  // Recorded totals are attributed by the day a run started, so they change
+  // when local midnight passes even if nothing ran. Refreshing on focus is what
+  // keeps "Today" from staying on yesterday's number in a window left open.
+  useEffect(() => {
+    const onFocus = () => {
+      void refreshCosts();
+      // Not forced: an unexpired reading is returned from cache, so returning
+      // to the window does not hit a provider.
+      void refreshQuota(false);
+    };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [refreshCosts, refreshQuota]);
+
+  // "Today" is a local calendar window, so it changes at midnight even when
+  // nothing ran and nobody touched the window. A focused app left open would
+  // otherwise keep showing yesterday.
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout>;
+    const scheduleMidnight = () => {
+      const now = new Date();
+      const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime();
+      timer = setTimeout(() => {
+        void refreshCosts();
+        scheduleMidnight();
+      }, Math.max(1000, midnight - now.getTime()));
+    };
+    scheduleMidnight();
+    return () => clearTimeout(timer);
+  }, [refreshCosts]);
+
+  // Opening the panel is what triggers the first read: an app whose panel is
+  // never opened never asks a provider anything.
+  //
+  // The interval then keeps a panel left open from silently ageing. It is not
+  // forced, so it costs nothing until the cache expires -- main answers from
+  // cache and the provider is only asked once the TTL is past.
+  useEffect(() => {
+    void refreshQuota(false);
+    const timer = setInterval(() => void refreshQuota(false), 60_000);
+    return () => clearInterval(timer);
+  }, [refreshQuota]);
 
   const members = useMemo(
     () => agents.filter((a) => memberIds.includes(a.id)),
@@ -82,13 +143,53 @@ export function RightPanel({ conversationId }: { conversationId: string }) {
     return map;
   }, [executions, conversationId]);
 
-  const conversationSpend = useMemo(
-    () =>
-      executions
-        .filter((e) => e.conversationId === conversationId)
-        .reduce((sum, e) => sum + e.costUsd, 0),
-    [executions, conversationId],
-  );
+  /**
+   * Quota is per login, so it is shown once per runtime present here, never
+   * once per agent. The count is how many LoCrew agents share it -- not a count
+   * of everything drawing on the account, which we cannot know.
+   */
+  const quotaRuntimes = useMemo(() => {
+    const counts = new Map<RuntimeType, number>();
+    for (const agent of members) counts.set(agent.runtimeType, (counts.get(agent.runtimeType) ?? 0) + 1);
+    return [...counts.entries()]
+      .map(([runtimeType, agentCount]) => ({ runtimeType, agentCount, snapshot: quota[runtimeType] }))
+      .filter(
+        (entry): entry is { runtimeType: RuntimeType; agentCount: number; snapshot: QuotaSnapshot } =>
+          entry.snapshot !== undefined,
+      );
+  }, [members, quota]);
+
+  /**
+   * Measured spend in this conversation, on the same basis as every other
+   * figure on screen. A run whose spend was never established contributes
+   * nothing to the number and is counted separately, so the row can say it is a
+   * floor rather than quietly reading as a total.
+   */
+  const conversationSpend = useMemo(() => {
+    let measuredUsd = 0;
+    let unverified = 0;
+    let unavailable = 0;
+    let unpriced = 0;
+    for (const execution of executions) {
+      if (execution.conversationId !== conversationId) continue;
+      if (execution.costProvenance === 'measured') measuredUsd += execution.costUsd;
+      else if (execution.costProvenance === 'unpriced') unpriced += 1;
+      else if (execution.costProvenance === 'unreported') {
+        // Counted once the run is over. Tokens cannot be the test: they are
+        // written by the same event as the cost, so their absence is the same
+        // absence rather than evidence about it.
+        if (execution.endedAt !== null) unavailable += 1;
+      } else unverified += 1;
+    }
+    return {
+      measuredUsd,
+      coverage: {
+        unverifiedExecutions: unverified,
+        unavailableExecutions: unavailable,
+        unpricedExecutions: unpriced,
+      },
+    };
+  }, [executions, conversationId]);
 
   if (!conversation) return null;
   const isChannel = conversation.kind === 'channel';
@@ -138,7 +239,7 @@ export function RightPanel({ conversationId }: { conversationId: string }) {
             return (
               <div
                 key={agent.id}
-                className="group flex h-10 items-center gap-2.5 rounded-md px-1.5 transition-colors duration-fast hover:bg-subtle"
+                className="group flex min-h-10 items-start gap-2.5 rounded-md px-1.5 py-1.5 transition-colors duration-fast hover:bg-subtle"
               >
                 <Avatar
                   name={agent.name}
@@ -168,6 +269,10 @@ export function RightPanel({ conversationId }: { conversationId: string }) {
                   >
                     {doing ? (doing.operation ?? doing.status) : PRESENCE_LABEL[presence]}
                   </p>
+                  {/* Recorded consumption, not this agent's share of the quota
+                      above: an agent has no private slice of an account-wide
+                      allowance, so no bar is drawn here. */}
+                  <UsageChips agent={agent} windows={costs?.windows} className="mt-1" />
                 </button>
                 {isChannel ? (
                   <button
@@ -252,11 +357,51 @@ export function RightPanel({ conversationId }: { conversationId: string }) {
           ) : null}
         </Group>
 
+        <Group
+          title="Provider usage"
+          action={
+            <GroupAction
+              label={quotaRefreshing ? 'Refreshing usage' : 'Refresh usage'}
+              onClick={() => void refreshQuota(true)}
+            >
+              <RefreshCw size={12} className={quotaRefreshing ? 'animate-spin' : undefined} />
+            </GroupAction>
+          }
+        >
+          {quotaRuntimes.length ? (
+            quotaRuntimes.map(({ runtimeType, snapshot, agentCount }) => (
+              <QuotaSection
+                key={runtimeType}
+                title={RUNTIME_LABEL[runtimeType]}
+                snapshot={snapshot}
+                agentCount={agentCount}
+              />
+            ))
+          ) : (
+            <Hint>
+              No agent here runs on a subscription plan, so there is no provider quota to show.
+            </Hint>
+          )}
+        </Group>
+
         <Group title={SHIP.panel.spend}>
-          <Row label={isChannel ? 'This channel' : 'This conversation'} value={formatUsd(conversationSpend)} />
-          <Row label="Last 24 hours" value={formatUsd(costs?.last24hUsd ?? 0)} />
-          <Row label="All time" value={formatUsd(costs?.totalUsd ?? 0)} />
-          <Hint>Estimated from runtime usage reports. Not a billing statement.</Hint>
+          <SpendRow
+            label={isChannel ? 'This channel' : 'This conversation'}
+            {...describeTotal(conversationSpend.measuredUsd, conversationSpend.coverage)}
+          />
+          <SpendRow
+            label="Last 24 hours"
+            {...describeTotal(costs?.last24hUsd ?? 0, costs?.last24hCoverage ?? NO_COVERAGE)}
+          />
+          <SpendRow
+            label="All time"
+            {...describeTotal(costs?.totalUsd ?? 0, costs?.totalCoverage ?? NO_COVERAGE)}
+          />
+          <Hint>
+            Recorded by LoCrew and estimated from runtime reports, not a billing statement. Separate
+            from the provider percentages above, which measure a plan allowance this app does not
+            control.
+          </Hint>
         </Group>
       </div>
 
@@ -388,6 +533,23 @@ function GroupAction({
 
 function Hint({ children }: { children: ReactNode }) {
   return <p className="px-1.5 py-1.5 text-2xs leading-relaxed text-content-faint">{children}</p>;
+}
+
+/** A spend figure that can say what it does not cover. */
+function SpendRow({ label, text, note }: { label: string; text: string; note: string | null }) {
+  return (
+    <div className="flex h-7 items-center justify-between px-1.5" title={note ?? undefined}>
+      <span className="text-xs text-content-muted">{label}</span>
+      <span
+        className={cn(
+          'text-xs font-medium tabular-nums',
+          note ? 'text-warning-ink' : 'text-content-strong',
+        )}
+      >
+        {text}
+      </span>
+    </div>
+  );
 }
 
 function Row({ label, value }: { label: string; value: string }) {

@@ -7,6 +7,7 @@ import { engineKind, engineLabel } from '@/lib/agents';
 import { HOLD_ACCESS, SHIP } from '@/lib/lexicon';
 import { cn } from '@/lib/utils';
 import { invoke, useApp } from '@/stores/app';
+import { UsageChips } from '@/components/usage/RecordedUsage';
 
 type Filter = 'all' | ReturnType<typeof engineKind>;
 const FILTERS: Filter[] = ['all', 'Local CLI', 'AI model', 'External agent'];
@@ -133,6 +134,7 @@ const PRESENCE_TEXT: Record<Presence, string> = {
 
 function AgentRow({ agent, presence }: { agent: Agent; presence: Presence }) {
   const providers = useApp((s) => s.providers);
+  const costs = useApp((s) => s.costs);
   const grants = useApp((s) => s.grants[agent.id]);
   const openAgentDm = useApp((s) => s.openAgentDm);
   const setEditingAgent = useApp((s) => s.setEditingAgent);
@@ -191,6 +193,9 @@ function AgentRow({ agent, presence }: { agent: Agent; presence: Presence }) {
           <Chip>{engineKind(agent)}</Chip>
           {agent.runtimeType === 'claude-code' || agent.runtimeType === 'codex' ? <Chip>{HOLD_ACCESS[agent.permissions.workspaceAccess].label}</Chip> : null}
           {toolCount ? <Chip tone="primary">{toolCount} MCP tool{toolCount === 1 ? '' : 's'}</Chip> : null}
+          {/* Recorded consumption. Deliberately not a quota bar: the plan
+              allowance is account-wide, so no agent owns a slice of it. */}
+          <UsageChips agent={agent} windows={costs?.windows} />
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-1">

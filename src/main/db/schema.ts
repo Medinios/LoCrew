@@ -10,6 +10,7 @@ import {
 import type {
   AgentConfig,
   AgentEventType,
+  CostProvenance,
   AgentPermissions,
   AgentStatus,
   ConversationKind,
@@ -211,7 +212,47 @@ export const agentExecutions = sqliteTable(
     chainId: text('chain_id').notNull(),
     chainDepth: integer('chain_depth').notNull().default(0),
     turns: integer('turns').notNull().default(0),
+    /**
+     * This execution's own spend, when `costProvenance` says it was measured.
+     *
+     * For rows written before per-execution accounting existed, and for the
+     * unverified cases below, this is not a measured figure -- read
+     * `costProvenance` before summing it. See {@link costProvenance}.
+     */
     costUsd: real('cost_usd').notNull().default(0),
+    /**
+     * The runtime's cumulative figure exactly as reported, before any
+     * measurement. Kept so a measurement can be re-derived or rolled back
+     * without losing what the provider actually said. Null only for rows that
+     * predate the column and had nothing to back-fill from.
+     */
+    rawCostUsd: real('raw_cost_usd'),
+    /**
+     * The session baseline this execution measured against, captured once when
+     * it first reported a cost.
+     *
+     * Held per execution, not read live, because `finish()` re-applies the last
+     * cost after the session baseline has already moved. Measuring against a
+     * frozen entry baseline makes the write idempotent: recording the same raw
+     * figure twice yields the same delta rather than collapsing it to zero.
+     */
+    baselineCostUsd: real('baseline_cost_usd'),
+    /** The native session this run reported, when the runtime has one. */
+    nativeSessionId: text('native_session_id'),
+    /**
+     * How much `costUsd` can be trusted. A binary flag is too coarse here: the
+     * four states need different treatment in totals and in limit enforcement.
+     *
+     *  - `measured`: baseline was known, so `costUsd` is this run's real spend.
+     *  - `baseline_only`: first sighting of a session that already existed, so
+     *    the run established a baseline for the next one but its own spend is
+     *    unknowable -- the earlier total was never recorded.
+     *  - `ambiguous`: the runtime's counter went backwards or reported zero. We
+     *    cannot tell a reset from a crashed result, so the run is not claimed.
+     *  - `legacy`: written before this column existed. For Claude Code these
+     *    hold a session cumulative, not a per-run figure.
+     */
+    costProvenance: text('cost_provenance').$type<CostProvenance>().notNull().default('legacy'),
     inputTokens: integer('input_tokens').notNull().default(0),
     outputTokens: integer('output_tokens').notNull().default(0),
     error: text('error'),
@@ -222,6 +263,48 @@ export const agentExecutions = sqliteTable(
     agentIdx: index('exec_agent_idx').on(t.agentId, t.startedAt),
     convIdx: index('exec_conv_idx').on(t.conversationId, t.startedAt),
     chainIdx: index('exec_chain_idx').on(t.chainId),
+  }),
+);
+
+/**
+ * Highest cumulative spend seen for one native runtime session.
+ *
+ * Claude Code reports `total_cost_usd` for a whole session, and this app
+ * resumes a session on every run, so a run's own spend is the difference
+ * between what it reported and what that session had already reached. This
+ * table is what makes that difference knowable across restarts.
+ *
+ * The key is deliberately narrow. A session id is the runtime's own handle and
+ * nothing documents it as globally unique, so it is qualified by the runtime
+ * and the pair it belongs to rather than trusted on its own.
+ */
+export const sessionCostBaselines = sqliteTable(
+  'session_cost_baselines',
+  {
+    runtimeType: text('runtime_type').$type<RuntimeType>().notNull(),
+    agentId: text('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    conversationId: text('conversation_id')
+      .notNull()
+      .references(() => conversations.id, { onDelete: 'cascade' }),
+    /** The runtime's own session id, as reported during the run. */
+    runtimeSessionId: text('runtime_session_id').notNull(),
+    /** Highest cumulative figure observed for this session so far. */
+    rawCostUsd: real('raw_cost_usd').notNull(),
+    /**
+     * Set when the last thing this session reported could not be trusted: a
+     * result of zero that may still have spent tokens. The figure above is then
+     * a lower bound on where the session really is, so the next run re-anchors
+     * rather than claiming a difference measured from it.
+     */
+    uncertain: integer('uncertain', { mode: 'boolean' }).notNull().default(false),
+    updatedAt: integer('updated_at').notNull().$defaultFn(ts),
+  },
+  (t) => ({
+    pk: primaryKey({
+      columns: [t.runtimeType, t.agentId, t.conversationId, t.runtimeSessionId],
+    }),
   }),
 );
 

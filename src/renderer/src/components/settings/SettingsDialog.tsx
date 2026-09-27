@@ -9,6 +9,10 @@ import { ProfilePane } from '@/components/settings/ProfilePane';
 import { ProvidersPane } from '@/components/settings/ProvidersPane';
 import { SHIP } from '@/lib/lexicon';
 import { cn, formatUsd } from '@/lib/utils';
+import { describeTotal } from '@/components/usage/RecordedUsage';
+
+/** Before the first summary arrives there is nothing known to be missing. */
+const NO_COVERAGE = { unverifiedExecutions: 0, unavailableExecutions: 0, unpricedExecutions: 0 };
 import { invoke, useApp, type SettingsSection } from '@/stores/app';
 
 const SECTIONS: Array<{ id: SettingsSection; label: string; icon: ReactNode }> = [
@@ -160,6 +164,9 @@ function GeneralPane() {
 function LimitsPane() {
   const { draft, save } = useSettingsDraft();
   const costs = useApp((s) => s.costs);
+  // The same wording the agent chips and the Spend rows use. A number here that
+  // silently omitted unverified runs would read as the whole history.
+  const recorded = describeTotal(costs?.totalUsd ?? 0, costs?.totalCoverage ?? NO_COVERAGE);
   if (!draft) return null;
   const saveLimit = <K extends keyof ExecutionLimits>(key: K, value: ExecutionLimits[K]) =>
     save({ limits: { ...draft.limits, [key]: value } });
@@ -229,7 +236,8 @@ function LimitsPane() {
       </div>
 
       <p className="rounded-lg bg-subtle px-3 py-2.5 text-2xs leading-relaxed text-content-muted">
-        Spend figures are estimates at API list prices, not a bill. Agents on your own providers report tokens but no price, so they never count toward the spend ceilings — the turn and hop limits above still apply to them. Recorded so far: {formatUsd(costs?.totalUsd ?? 0)}.
+        Spend figures are estimates at API list prices, not a bill. Agents on your own providers report tokens but no price, so they never count toward the spend ceilings — the turn and hop limits above still apply to them. Recorded so far: {recorded.text}.
+        {recorded.note ? <span className="block pt-1 text-warning-ink">{recorded.note}</span> : null}
       </p>
     </div>
   );

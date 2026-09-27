@@ -1,6 +1,6 @@
 import { Check, ChevronRight, Loader2, Square, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import type { Agent, AgentEvent, AgentExecution, Message } from '@shared/types';
+import type { Agent, AgentEvent, AgentExecution, CostProvenance, Message } from '@shared/types';
 import { Avatar, PRESENCE_LABEL, StatusDot, isTerminal, type Presence } from '@/components/ui/primitives';
 import { SidePanelHeader } from '@/components/layout/RightPanel';
 import { agentPresence, describeAgentActivity } from '@/lib/activity';
@@ -243,7 +243,7 @@ function RunRow({
           <span className="block truncate text-2xs text-content-faint">
             {formatWhen(run.startedAt)} · {formatDuration(Math.max(0, duration))}
             {run.turns ? ` · ${run.turns} turns` : ''}
-            {run.costUsd ? ` · ${formatUsd(run.costUsd)}` : ''}
+            {describeRunCost(run)}
             {run.trigger === 'agent' ? ' · by an agent' : ''}
           </span>
         </span>
@@ -361,5 +361,25 @@ function describeEvent(event: AgentEvent): Step | null {
       return { label: 'Compacted its context' };
     default:
       return null;
+  }
+}
+
+/**
+ * What one run cost, or an honest word when that is not knowable.
+ *
+ * A row recorded before per-execution accounting holds a whole-session
+ * cumulative, so printing it here would show a single run as having cost what a
+ * whole day of them did. Only a measured figure is a price; everything else
+ * says what it is. An unpriced runtime shows nothing at all, because there was
+ * never a price to show rather than one we lost.
+ */
+function describeRunCost(run: { costUsd: number; costProvenance: CostProvenance }): string {
+  switch (run.costProvenance) {
+    case 'measured':
+      return run.costUsd ? ` · ${formatUsd(run.costUsd)}` : '';
+    case 'unpriced':
+      return '';
+    default:
+      return ' · cost not measured';
   }
 }
