@@ -30,6 +30,9 @@ jobs:
   checks:
     name: Typecheck and tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # Well clear of the few minutes this takes. The point is that a hang fails
+    # in minutes instead of holding a runner for GitHub's six-hour default.
+    timeout-minutes: 20
     strategy:
       # One platform failing should not hide the result on the other.
       fail-fast: false
@@ -61,6 +64,7 @@ jobs:
   e2e:
     name: End-to-end (Linux)
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     # Only worth the minutes once the cheap checks have passed.
     needs: checks
 
@@ -83,3 +87,15 @@ jobs:
       # only works on a runner that provides xvfb. Playwright drives Electron
       # directly here and installs no browsers.
       - run: xvfb-run --auto-servernum npm run test:e2e
+
+      # A failing end-to-end test is close to unreadable from the bare
+      # assertion: it says what was expected, not what the app was showing.
+      # Playwright writes the page as the test last saw it beside the result,
+      # and that is the half worth having.
+      - if: failure()
+        run: |
+          for f in test-results/*/error-context.md; do
+            [ -e "$f" ] || continue
+            echo "===== $f ====="
+            cat "$f"
+          done

@@ -50,6 +50,21 @@ function guiEnv(): Record<string, string> {
   return env;
 }
 
+/**
+ * Whether this machine can store a credential at all.
+ *
+ * The app refuses to save an API key when the OS has no credential storage,
+ * rather than writing it in the clear -- so on a headless Linux box with no
+ * keyring, adding a provider *with a key* genuinely cannot succeed. That is
+ * the product behaving correctly, not a broken test, and it is what a Linux
+ * user without a keyring will meet.
+ *
+ * So the suite asks the app instead of assuming. Everything that does not
+ * depend on a stored credential runs everywhere; the two assertions that do
+ * are skipped where they cannot mean anything, and say why.
+ */
+let keychain = true;
+
 function filesUnder(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
     const path = join(dir, name);
@@ -90,6 +105,11 @@ test.beforeAll(async () => {
   page = await app.firstWindow();
   await page.waitForLoadState('domcontentloaded');
 
+  keychain = await app.evaluate(({ safeStorage }) => safeStorage.isEncryptionAvailable());
+  if (!keychain) {
+    console.log('No OS credential storage here: the provider is added without an API key.');
+  }
+
   // The launch approval is a native message box Playwright cannot click.
   // Answer "Launch" and keep what it showed so the test can check it.
   await app.evaluate(({ dialog }) => {
@@ -122,7 +142,7 @@ test('adds an OpenAI-compatible provider and tests the connection', async () => 
   const form = page.getByRole('dialog', { name: 'Add OpenAI-compatible API' });
   await form.getByPlaceholder('My Local AI').fill('Mock Provider');
   await form.getByPlaceholder('http://localhost:1234/v1').fill(`${provider.url}/v1`);
-  await form.getByPlaceholder('Encrypted with your OS keychain').fill(API_KEY);
+  if (keychain) await form.getByPlaceholder('Encrypted with your OS keychain').fill(API_KEY);
   await form.getByRole('button', { name: 'Test connection' }).click();
   await expect(form.getByText('Connection works')).toBeVisible();
 
@@ -132,8 +152,10 @@ test('adds an OpenAI-compatible provider and tests the connection', async () => 
   await expect(settings.getByText(/1 model/).first()).toBeVisible();
 
   // The key went out as a bearer token...
-  const listing = provider.requests.find((r) => r.path === '/v1/models');
-  expect(listing?.headers.authorization).toBe(`Bearer ${API_KEY}`);
+  if (keychain) {
+    const listing = provider.requests.find((r) => r.path === '/v1/models');
+    expect(listing?.headers.authorization).toBe(`Bearer ${API_KEY}`);
+  }
 });
 
 test('adds a local MCP server only after its launch is approved', async () => {
@@ -324,6 +346,7 @@ test('denies a tool call, and tells the agent so', async () => {
 });
 
 test('never writes the API key to disk in plain text', async () => {
+  test.skip(!keychain, 'No credential was stored: this machine has no OS credential storage.');
   const hits = filesUnder(userDataDir).filter((path) => {
     try {
       return readFileSync(path).includes(API_KEY);
