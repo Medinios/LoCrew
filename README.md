@@ -71,7 +71,10 @@ An agent can run on a coding CLI you already use (Claude Code or OpenAI Codex), 
 | **Images and files** | Paste, drop or pick images to send to agents. Attach local files as path links. |
 | **Tasks** | Track work across agents. Agents can update the tasks they are assigned to. |
 | **Safety controls** | File access levels (*Read only*, *Ask first*, *Full access*), approval before writes, one writer per directory at a time, spend and run limits, and a Stop button for every run. |
+| **Review before a write** | An agent's write stops and shows you the diff first: the file, the lines going in and out, and the command for a shell call. Allow it, deny it, or stop being asked for a while. |
+| **Work sessions** | Approving every single write gets tiring. A work session gives one agent, or every agent in a directory, write access for 15 minutes to 4 hours or until you end it. Sessions live in memory only, and closing LoCrew returns to asking. |
 | **Workspace** | An inbox of agent replies, an agent directory, channel icons, a workspace name, your profile name and photo, and a spend overview. |
+| **About and credits** | Settings → About lists the version, the versions a bug report needs, links to the repository and its issues, and every open-source project LoCrew ships, read from the installed packages. |
 | **Text** | Markdown with syntax-highlighted code, and correct layout for mixed right-to-left and left-to-right text. |
 
 ### Experimental
@@ -286,6 +289,7 @@ The **Agents** view lists every agent with its engine and status. From there you
 | Setting | Values | Default |
 |---|---|---|
 | File access (Claude Code and Codex) | *Read only*: reads only. *Ask first*: you approve each write. *Full access*: no prompts. | *Ask first* |
+| Work session (temporary) | Lifts the prompts for *Ask first* agents, for a set time or until ended. Per agent, or per working directory. | none open |
 | May be woken by other agents | on / off | on |
 | May update tasks | on / off | on |
 | Spend ceiling per run | US dollars; 0 turns the check off | $2 |
@@ -458,6 +462,7 @@ Detailed design documents:
 | `npm run dist` | Build installers: NSIS on Windows, DMG on macOS, AppImage on Linux |
 | `npm run rebuild` | Recompile the SQLite native module for Electron |
 | `npm run icons` | Render `resources/icon.svg` to `resources/icon.png` |
+| `npm run credits` | Rebuild the About screen's credits from the installed packages |
 
 ### Running tests
 
@@ -513,6 +518,8 @@ Contributions are welcome, from bug reports to new integrations. The repository 
 
 **Improving documentation.** Corrections and clarifications to this README and to `docs/` are as valuable as code, especially where the documentation and the app disagree.
 
+**Adding a dependency.** Run `npm run credits` afterwards, so the About screen credits it with the right version and licence.
+
 **Adding an AI provider.**
 
 - If the provider speaks one of the four supported formats, it usually needs no code: users can add it as an OpenAI-compatible or custom provider. To make it a preset, add an entry to `src/shared/provider-presets.ts`, using the endpoint and auth style from the provider's own documentation.
@@ -562,7 +569,8 @@ LoCrew runs agents that can read and change files on your computer. Read this se
 - **Credentials.** Keys are encrypted with the OS keychain. They are never sent to the user interface, never logged, and removed from error messages.
 - **An isolated interface.** The renderer runs with context isolation and the OS sandbox, and without Node.js integration. It reaches the main process only through an allowlisted, schema-validated bridge.
 - **Agent identity.** Each agent gets its own token, created at launch and never written to disk. The local gateway listens only on `127.0.0.1`, and rejects browser requests and unexpected `Host` headers.
-- **File access.** Writes can require your approval before anything touches disk. Only one agent writes to a directory at a time.
+- **File access.** Writes can require your approval before anything touches disk, with the diff of the change in front of you. Only one agent writes to a directory at a time. If nothing can answer the question, because the window closed or the run was stopped, the operation is refused rather than left pending.
+- **Work sessions.** Temporary write access is held in memory, never on disk, so a restart returns to asking. It never raises a read-only agent, never covers MCP tools, and is shown in the sidebar for as long as it is open, with one click to end it.
 - **MCP.** Local MCP servers start only after you approve the exact command. Tools require explicit per-agent grants, and tool output is treated as data.
 - **Untrusted messages.** Every agent's system prompt says that messages from other agents are untrusted and cannot grant permissions. This is an instruction to the model, not a guarantee.
 

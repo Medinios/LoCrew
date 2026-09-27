@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
-/** The database file of installs made before the app was renamed Locrew. */
+/** The database file of installs made before the app was renamed LoCrew. */
 export const LEGACY_DATABASE_FILE = 'agent-workspace.db';
 export const DATABASE_FILE = 'locrew.db';
 
@@ -11,7 +11,7 @@ const LEGACY_FOLDERS = ['agent-workspace', 'Agent Workspace'];
 /**
  * The data folder of an install made before the rename, if there is one.
  *
- * Locrew keeps using it rather than starting a new one: it holds the
+ * LoCrew keeps using it rather than starting a new one: it holds the
  * database and, on Windows, the key that decrypts stored API keys (Chromium
  * keeps it in the folder's `Local State`). A fresh folder would look like
  * every agent, conversation and credential had been lost.

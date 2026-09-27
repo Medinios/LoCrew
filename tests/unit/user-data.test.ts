@@ -5,7 +5,7 @@ import { databasePath, legacyUserDataDir } from '../../src/main/user-data';
 const APP_DATA = join('C:', 'Users', 'someone', 'AppData', 'Roaming');
 const existing = (...paths: string[]) => (path: string) => paths.includes(path);
 
-describe('data folder across the rename to Locrew', () => {
+describe('data folder across the rename to LoCrew', () => {
   it('keeps using the AgentWorkspace folder when it holds a database', () => {
     const dir = join(APP_DATA, 'agent-workspace');
     expect(legacyUserDataDir(APP_DATA, existing(join(dir, 'agent-workspace.db')))).toBe(dir);
@@ -21,7 +21,7 @@ describe('data folder across the rename to Locrew', () => {
   });
 
   it('starts fresh installs on the new database name', () => {
-    const dir = join(APP_DATA, 'Locrew');
+    const dir = join(APP_DATA, 'LoCrew');
     expect(databasePath(dir, existing())).toBe(join(dir, 'locrew.db'));
   });
 

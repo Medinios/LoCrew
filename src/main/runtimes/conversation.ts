@@ -26,7 +26,7 @@ export function buildConversationalSystemPrompt(
     : '  (no other agents here)';
 
   const lines = [
-    `You are "${agent.name}", an AI agent in Locrew, a local chat workspace where a human operator and a team of AI agents collaborate.`,
+    `You are "${agent.name}", an AI agent in LoCrew, a local chat workspace where a human operator and a team of AI agents collaborate.`,
     agent.description ? `Your role: ${agent.description}` : '',
     `You are in ${place}.`,
     '',

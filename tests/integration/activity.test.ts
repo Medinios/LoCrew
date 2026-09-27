@@ -203,7 +203,7 @@ describe('cancellation', () => {
     const claude = h.createAgent('Claude');
     const dm = createDm(h, claude);
     h.runtime.hooks.set(claude.id, async (ctx) => {
-      const answer = ctx.requestApproval({ agentId: claude.id, executionId: ctx.executionId, toolName: 'Write', input: {} });
+      const answer = ctx.requestApproval({ agentId: claude.id, executionId: ctx.executionId, toolName: 'Write', input: {}, kind: 'workspace' });
       h.orchestrator.cancelExecution(ctx.executionId);
       await answer;
     });

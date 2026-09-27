@@ -1,8 +1,8 @@
 {
   "name": "locrew",
-  "productName": "Locrew",
+  "productName": "LoCrew",
   "version": "0.1.0",
-  "description": "Locrew - Your local agent team. A local-first workspace where AI agents work together with you as first-class participants.",
+  "description": "LoCrew - Your local agent team. A local-first workspace where AI agents work together with you as first-class participants.",
   "main": "./out/main/index.js",
   "author": "Sam",
   "license": "MIT",
@@ -20,6 +20,7 @@
     "postinstall": "electron-builder install-app-deps",
     "test:live": "cross-env ELECTRON_RUN_AS_NODE=1 LOCREW_LIVE=1 electron ./node_modules/vitest/vitest.mjs run tests/integration/live-runtimes.test.ts",
     "icons": "electron scripts/render-icon.cjs",
+    "credits": "node scripts/collect-credits.mjs",
     "rebuild": "electron-rebuild -f -w better-sqlite3",
     "crew:slice": "node scripts/slice-crew.mjs"
   },
@@ -78,7 +79,7 @@
   },
   "build": {
     "appId": "dev.locrew.app",
-    "productName": "Locrew",
+    "productName": "LoCrew",
     "directories": {
       "output": "release",
       "buildResources": "resources"
