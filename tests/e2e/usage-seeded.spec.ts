@@ -24,7 +24,11 @@ test('shows nonzero measured spend alongside legacy and unpriced usage', async (
     seedProfile(dir);
     const env: Record<string, string> = {};
     for (const [key, value] of Object.entries(process.env)) {
-      if (key !== 'ELECTRON_RUN_AS_NODE' && value !== undefined) env[key] = value;
+      // See HOSTILE_ENV in app.spec.ts: a live dev server would otherwise
+      // serve this test a renderer from a different checkout entirely.
+      if (key !== 'ELECTRON_RUN_AS_NODE' && key !== 'ELECTRON_RENDERER_URL' && value !== undefined) {
+        env[key] = value;
+      }
     }
     app = await electron.launch({ args: ['.', `--user-data-dir=${dir}`], cwd: process.cwd(), env });
     const page = await app.firstWindow();

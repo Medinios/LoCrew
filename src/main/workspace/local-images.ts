@@ -1,5 +1,5 @@
 import { realpath, stat } from 'node:fs/promises';
-import { extname, isAbsolute, relative, resolve } from 'node:path';
+import { extname, isAbsolute, posix, resolve, win32 } from 'node:path';
 
 /**
  * Serving local images to the renderer.
@@ -48,12 +48,24 @@ export function pathFromImageUrl(url: string): string | null {
   }
 }
 
-/** True when `target` is `root` itself or sits somewhere beneath it. */
+/**
+ * True when `target` is `root` itself or sits somewhere beneath it.
+ *
+ * The path flavour follows the `platform` argument rather than the host. That
+ * argument exists so the Windows rules can be checked from anywhere, and it is
+ * only honest if the comparison uses Windows semantics too: on a POSIX host
+ * `relative('d:\\dev', 'd:\\dev\\x')` treats the backslashes as ordinary
+ * characters and answers `../d:\\dev\\x`, so a contained path reads as an
+ * escape. Behaviour on a real Windows machine is unchanged -- there the host
+ * flavour already was win32.
+ */
 export function isInside(root: string, target: string, platform = process.platform): boolean {
-  const a = platform === 'win32' ? root.toLowerCase() : root;
-  const b = platform === 'win32' ? target.toLowerCase() : target;
-  const rel = relative(a, b);
-  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+  const windows = platform === 'win32';
+  const path = windows ? win32 : posix;
+  const a = windows ? root.toLowerCase() : root;
+  const b = windows ? target.toLowerCase() : target;
+  const rel = path.relative(a, b);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
 export type LocalImageResult =
